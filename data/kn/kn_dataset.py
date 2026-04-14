@@ -385,6 +385,8 @@ class KilonovaContrastiveDataset(Dataset):
             else:
                 physics = None  # re-samplear en siguiente intento
         else:
+            if physics is None:
+                physics = self._sample_physics(rng)
             lc1_full = self.simulate(**physics, t_explosion=self._mjd_min,
                                      survey_mode=survey_mode, rng=rng)
             lc2_full = self.simulate(**physics, t_explosion=self._mjd_min,
