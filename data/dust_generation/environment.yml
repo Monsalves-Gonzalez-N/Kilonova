@@ -1,0 +1,13 @@
+name: kn_extinction
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - pyarrow
+  - h5py
+  - astropy
+  - specutils
+  - dust_extinction
+  - dustmaps
