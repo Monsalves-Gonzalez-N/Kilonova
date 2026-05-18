@@ -22,10 +22,13 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyphot
 from astropy import constants as const
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.cosmology import Planck18
+from astropy.io import fits
+from astropy.table import Table
 from dust_extinction.parameter_averages import F99
 from dustmaps.sfd import SFDQuery
 from specutils import Spectrum
@@ -36,6 +39,7 @@ F99_VALID_RANGE = (1000.0, 33333.0)
 FLUX_UNIT = u.Unit('erg / (s cm2 AA)')
 CM_TO_ANG = (1 * u.cm).to(u.AA).value
 N_ANGLE_BINS = 54
+DEFAULT_KCOR_PATH = Path(__file__).resolve().parent.parent / 'kcor' / 'kcor_ROMAN.fits'
 
 _SPEC_PATTERN = re.compile(
     r'Run_(T[PS])_dyn_all_lanth_(wind\d)_all_'
@@ -277,6 +281,52 @@ def load_lanl_catalog(catalog_path, grid_directory):
 
 
 # ---------------------------------------------------------------------------
+# Roman synthetic photometry (matches Extinction.ipynb)
+# ---------------------------------------------------------------------------
+
+def load_roman_filters(kcor_path):
+    with fits.open(kcor_path) as hdul:
+        filter_table = Table(hdul['FilterTrans'].data)
+
+    column_names = filter_table.colnames
+    wavelength_angstrom = np.array(filter_table[column_names[0]], dtype=float)
+    filter_columns = [name for name in column_names[1:] if name != 'W146-W']
+
+    roman_filters = {}
+    for filter_name in filter_columns:
+        response = np.array(filter_table[filter_name], dtype=float)
+        pyphot_filter = pyphot.Filter(
+            wavelength_angstrom * pyphot.config.units.U('AA'),
+            response,
+            name=filter_name,
+            dtype='photon',
+        )
+        leff_quantity = pyphot_filter.leff.to('AA')
+        lambda_eff = float(getattr(leff_quantity, 'value', getattr(leff_quantity, 'magnitude', leff_quantity)))
+        roman_filters[filter_name] = {
+            'filter': pyphot_filter,
+            'lambda_eff': lambda_eff,
+        }
+    return roman_filters
+
+
+def compute_roman_ab_magnitudes(wavelength_observed, flux_observed, roman_filters):
+    wavelength_with_units = np.asarray(wavelength_observed, dtype=float) * pyphot.config.units.U('AA')
+    flux_with_units = np.asarray(flux_observed, dtype=float) * pyphot.config.units.U('flam')
+
+    ab_magnitudes = {}
+    for filter_name, filter_data in roman_filters.items():
+        pyphot_filter = filter_data['filter']
+        synthetic_flux = pyphot_filter.get_flux(wavelength_with_units, flux_with_units, axis=-1)
+        flux_value = float(synthetic_flux.value if hasattr(synthetic_flux, 'value') else synthetic_flux.magnitude)
+        if flux_value <= 0 or not np.isfinite(flux_value):
+            ab_magnitudes[filter_name] = np.nan
+        else:
+            ab_magnitudes[filter_name] = -2.5 * np.log10(flux_value) - pyphot_filter.AB_zero_mag
+    return ab_magnitudes
+
+
+# ---------------------------------------------------------------------------
 # New: dataset generation driver
 # ---------------------------------------------------------------------------
 
@@ -297,6 +347,13 @@ def select_spectrum_ids(catalog, max_spectra, random_seed):
     return np.sort(rng.choice(catalog.index.to_numpy(), size=max_spectra, replace=False))
 
 
+def _is_detected_in_any_band(ab_magnitudes, detection_mag_limit):
+    for magnitude in ab_magnitudes.values():
+        if np.isfinite(magnitude) and magnitude <= detection_mag_limit:
+            return True
+    return False
+
+
 def iterate_attenuated_rows(
     catalog,
     spectrum_ids,
@@ -304,88 +361,121 @@ def iterate_attenuated_rows(
     av_pool,
     rv_pool,
     ebv_pool,
+    roman_filters,
     random_seed,
+    detection_mag_limit,
 ):
     rng = np.random.default_rng(random_seed)
     selected_ids = set(int(value) for value in spectrum_ids)
     catalog_subset = catalog.loc[catalog.index.isin(selected_ids)]
+    filter_names = list(roman_filters.keys())
+    redshift_grid_sorted = np.sort(np.asarray(redshift_grid, dtype=float))
 
     for filepath, file_catalog in catalog_subset.groupby('filepath'):
         times_file, lam_AA, flux_cube = parse_spec(filepath)
 
-        for spectrum_id in file_catalog.index:
-            row = file_catalog.loc[spectrum_id]
-            time_index = int(row['time_index'])
-            angle_index = int(row['angle_index'])
-            spectrum_slice = flux_cube[time_index, :, angle_index]
-            valid_mask = spectrum_slice > 0
-            if not valid_mask.any():
-                continue
-            wavelength_rest = lam_AA[valid_mask]
-            flux_rest = spectrum_slice[valid_mask]
+        for angle_index, angle_catalog in file_catalog.groupby('angle_index'):
+            angle_catalog_sorted = angle_catalog.sort_values('time_index')
+            stop_light_curve = False
 
-            for redshift in redshift_grid:
-                av_host = float(rng.choice(av_pool))
-                rv_host = float(rng.choice(rv_pool))
-                ebv_mw = float(rng.choice(ebv_pool))
+            for spectrum_id, row in angle_catalog_sorted.iterrows():
+                if stop_light_curve:
+                    break
 
-                observed = generate_observed_kilonova_spectrum(
-                    wavelength_rest=wavelength_rest,
-                    spectrum_input=flux_rest,
-                    extinction_av_host=av_host,
-                    extinction_rv_host=rv_host,
-                    redshift=float(redshift),
-                    ebv_milky_way=ebv_mw,
-                )
-                parameters = observed['parameters']
+                time_index = int(row['time_index'])
+                spectrum_slice = flux_cube[time_index, :, int(angle_index)]
+                valid_mask = spectrum_slice > 0
+                if not valid_mask.any():
+                    continue
+                wavelength_rest = lam_AA[valid_mask]
+                flux_rest = spectrum_slice[valid_mask]
 
-                yield {
-                    'spectrum_id': int(spectrum_id),
-                    'simulation_id': int(row['simulation_id']),
-                    'run_type': str(row['run_type']),
-                    'wind': str(row['wind']),
-                    'mass_dynamical': float(row['mass_dynamical']),
-                    'velocity_dynamical': float(row['velocity_dynamical']),
-                    'mass_wind': float(row['mass_wind']),
-                    'velocity_wind': float(row['velocity_wind']),
-                    'time_index': time_index,
-                    'time_days': float(row['time_days']),
-                    'angle_index': angle_index,
-                    'redshift': float(redshift),
-                    'av_host': av_host,
-                    'rv_host': rv_host,
-                    'ebv_milky_way': ebv_mw,
-                    'av_milky_way': parameters['extinction_av_milky_way'],
-                    'luminosity_distance_parsec': parameters['luminosity_distance_parsec'],
-                    'wavelength_observed': observed['wavelength_observed'].astype(np.float64).tolist(),
-                    'flux_observed': observed['flux_observed'].astype(np.float64).tolist(),
-                }
+                detected_at_smallest_redshift = False
+
+                for redshift in redshift_grid_sorted:
+                    av_host = float(rng.choice(av_pool))
+                    rv_host = float(rng.choice(rv_pool))
+                    ebv_mw = float(rng.choice(ebv_pool))
+
+                    observed = generate_observed_kilonova_spectrum(
+                        wavelength_rest=wavelength_rest,
+                        spectrum_input=flux_rest,
+                        extinction_av_host=av_host,
+                        extinction_rv_host=rv_host,
+                        redshift=float(redshift),
+                        ebv_milky_way=ebv_mw,
+                    )
+                    parameters = observed['parameters']
+
+                    ab_magnitudes = compute_roman_ab_magnitudes(
+                        observed['wavelength_observed'],
+                        observed['flux_observed'],
+                        roman_filters,
+                    )
+
+                    detected = _is_detected_in_any_band(ab_magnitudes, detection_mag_limit)
+
+                    output_row = {
+                        'spectrum_id': int(spectrum_id),
+                        'simulation_id': int(row['simulation_id']),
+                        'run_type': str(row['run_type']),
+                        'wind': str(row['wind']),
+                        'mass_dynamical': float(row['mass_dynamical']),
+                        'velocity_dynamical': float(row['velocity_dynamical']),
+                        'mass_wind': float(row['mass_wind']),
+                        'velocity_wind': float(row['velocity_wind']),
+                        'time_index': time_index,
+                        'time_days': float(row['time_days']),
+                        'angle_index': int(angle_index),
+                        'redshift': float(redshift),
+                        'av_host': av_host,
+                        'rv_host': rv_host,
+                        'ebv_milky_way': ebv_mw,
+                        'av_milky_way': parameters['extinction_av_milky_way'],
+                        'luminosity_distance_parsec': parameters['luminosity_distance_parsec'],
+                        'detected': bool(detected),
+                    }
+                    for filter_name in filter_names:
+                        output_row[f'mag_ab_{filter_name}'] = float(ab_magnitudes[filter_name])
+                    yield output_row
+
+                    if redshift == redshift_grid_sorted[0]:
+                        detected_at_smallest_redshift = detected
+
+                    if not detected:
+                        break
+
+                if not detected_at_smallest_redshift:
+                    stop_light_curve = True
 
 
-PARQUET_SCHEMA = pa.schema([
-    ('spectrum_id', pa.int64()),
-    ('simulation_id', pa.int64()),
-    ('run_type', pa.string()),
-    ('wind', pa.string()),
-    ('mass_dynamical', pa.float64()),
-    ('velocity_dynamical', pa.float64()),
-    ('mass_wind', pa.float64()),
-    ('velocity_wind', pa.float64()),
-    ('time_index', pa.int64()),
-    ('time_days', pa.float64()),
-    ('angle_index', pa.int64()),
-    ('redshift', pa.float64()),
-    ('av_host', pa.float64()),
-    ('rv_host', pa.float64()),
-    ('ebv_milky_way', pa.float64()),
-    ('av_milky_way', pa.float64()),
-    ('luminosity_distance_parsec', pa.float64()),
-    ('wavelength_observed', pa.list_(pa.float64())),
-    ('flux_observed', pa.list_(pa.float64())),
-])
+def build_parquet_schema(filter_names):
+    fields = [
+        ('spectrum_id', pa.int64()),
+        ('simulation_id', pa.int64()),
+        ('run_type', pa.string()),
+        ('wind', pa.string()),
+        ('mass_dynamical', pa.float64()),
+        ('velocity_dynamical', pa.float64()),
+        ('mass_wind', pa.float64()),
+        ('velocity_wind', pa.float64()),
+        ('time_index', pa.int64()),
+        ('time_days', pa.float64()),
+        ('angle_index', pa.int64()),
+        ('redshift', pa.float64()),
+        ('av_host', pa.float64()),
+        ('rv_host', pa.float64()),
+        ('ebv_milky_way', pa.float64()),
+        ('av_milky_way', pa.float64()),
+        ('luminosity_distance_parsec', pa.float64()),
+        ('detected', pa.bool_()),
+    ]
+    for filter_name in filter_names:
+        fields.append((f'mag_ab_{filter_name}', pa.float64()))
+    return pa.schema(fields)
 
 
-def write_dataset(row_iterator, output_path, batch_size):
+def write_dataset(row_iterator, output_path, batch_size, schema):
     writer = None
     batch = []
     total_rows = 0
@@ -393,17 +483,17 @@ def write_dataset(row_iterator, output_path, batch_size):
         for row in row_iterator:
             batch.append(row)
             if len(batch) >= batch_size:
-                table = pa.Table.from_pylist(batch, schema=PARQUET_SCHEMA)
+                table = pa.Table.from_pylist(batch, schema=schema)
                 if writer is None:
-                    writer = pq.ParquetWriter(output_path, PARQUET_SCHEMA, compression='zstd')
+                    writer = pq.ParquetWriter(output_path, schema, compression='zstd')
                 writer.write_table(table)
                 total_rows += len(batch)
                 print(f'  wrote {total_rows} rows', flush=True)
                 batch = []
         if batch:
-            table = pa.Table.from_pylist(batch, schema=PARQUET_SCHEMA)
+            table = pa.Table.from_pylist(batch, schema=schema)
             if writer is None:
-                writer = pq.ParquetWriter(output_path, PARQUET_SCHEMA, compression='zstd')
+                writer = pq.ParquetWriter(output_path, schema, compression='zstd')
             writer.write_table(table)
             total_rows += len(batch)
             print(f'  wrote {total_rows} rows', flush=True)
@@ -415,18 +505,23 @@ def write_dataset(row_iterator, output_path, batch_size):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    script_directory = Path(__file__).resolve().parent
     parser.add_argument('--lanl-dir', type=Path,
-                        default=Path('/Volumes/Elements/kilonova/LANL_grid/kn_sim_cube_v1'),
-                        help='Directory containing LANL *_spec_*.dat files (mount the external drive first).')
+                        default=script_directory / 'kn_sim_cube_v1',
+                        help='Directory containing LANL *_spec_*.dat files (relative to the script by default).')
     parser.add_argument('--catalog-path', type=Path,
-                        default=Path('/Users/bhianca/Kilonova/data/lanl_catalog.parquet'),
+                        default=script_directory / 'lanl_catalog.parquet',
                         help='Path to the LANL catalog parquet. Built from --lanl-dir if missing.')
     parser.add_argument('--hourglass-parquet', type=Path,
-                        default=Path(__file__).parent / 'hourglass_objects.parquet',
+                        default=script_directory / 'hourglass_objects.parquet',
                         help='Hourglass objects parquet (used to sample Milky Way E(B-V) at real survey coordinates).')
     parser.add_argument('--output', type=Path,
-                        default=Path('/Users/bhianca/Kilonova/data/dust_generation/lanl_extinguished_spectra.parquet'),
+                        default=script_directory / 'lanl_extinguished_photometry.parquet',
                         help='Output parquet path.')
+    parser.add_argument('--kcor-path', type=Path, default=DEFAULT_KCOR_PATH,
+                        help='SNANA kcor FITS with Roman FilterTrans extension.')
+    parser.add_argument('--detection-mag-limit', type=float, default=27.0,
+                        help='AB-mag faint limit; STOP triggers when no band reaches this depth.')
 
     parser.add_argument('--redshift-min', type=float, default=0.01)
     parser.add_argument('--redshift-max', type=float, default=0.5)
@@ -454,6 +549,11 @@ def main():
         )
     catalog = load_lanl_catalog(arguments.catalog_path, arguments.lanl_dir)
     print(f'  catalog rows: {len(catalog):,}', flush=True)
+
+    print(f'Loading Roman filters from {arguments.kcor_path}...', flush=True)
+    roman_filters = load_roman_filters(arguments.kcor_path)
+    filter_names = list(roman_filters.keys())
+    print(f'  {len(filter_names)} filters: {filter_names}', flush=True)
 
     print('Sampling extinction pools...', flush=True)
     np.random.seed(arguments.random_seed)
@@ -490,10 +590,13 @@ def main():
         av_pool=av_pool,
         rv_pool=rv_pool,
         ebv_pool=ebv_pool,
+        roman_filters=roman_filters,
         random_seed=arguments.random_seed,
+        detection_mag_limit=arguments.detection_mag_limit,
     )
 
-    total = write_dataset(row_iterator, arguments.output, arguments.batch_size)
+    schema = build_parquet_schema(filter_names)
+    total = write_dataset(row_iterator, arguments.output, arguments.batch_size, schema)
     print(f'Done. Wrote {total:,} rows to {arguments.output}', flush=True)
 
 
