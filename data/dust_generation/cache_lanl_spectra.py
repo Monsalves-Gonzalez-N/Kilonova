@@ -1,8 +1,15 @@
 """Dump the LANL kilonova .dat grid into a single parquet of rest-frame spectra.
 
-One row per (simulation_id, time_index, angle_index) with the positive-flux
-subset of the wavelength grid and the corresponding flux_lambda (float32).
+One row per (simulation_id, time_index, angle_index). Flux is stored as a
+FixedSizeList<float32, 1024>; the shared wavelength grid is written once to the
+parquet schema metadata as raw float32 bytes (key ``wavelength_rest_aa``).
 Parallelized with Ray: one remote task per .dat file.
+
+Read back the wavelength grid with::
+
+    table = pyarrow.parquet.read_table('lanl_spectra.parquet')
+    lam_aa = numpy.frombuffer(table.schema.metadata[b'wavelength_rest_aa'], dtype=numpy.float32)
+    flux = table.column('flux_rest').to_numpy_ndarray().reshape(-1, lam_aa.size)
 """
 
 import argparse
@@ -14,15 +21,18 @@ import pyarrow.parquet as pq
 import ray
 
 from generate_extinguished_spectra import (
+    CM_TO_ANG,
+    _read_header_times,
     load_lanl_catalog,
-    parse_spec,
 )
 
 
-SPECTRA_SCHEMA = pa.schema([
+N_WAVELENGTHS = 1024  # invariant across kn_sim_cube_v1/*_spec_*.dat
+
+SCHEMA_FIELDS = [
     ('simulation_id', pa.int64()),
-    ('run_type', pa.string()),
-    ('wind', pa.string()),
+    ('run_type', pa.dictionary(pa.int8(), pa.string())),
+    ('wind', pa.dictionary(pa.int8(), pa.string())),
     ('mass_dynamical', pa.float32()),
     ('velocity_dynamical', pa.float32()),
     ('mass_wind', pa.float32()),
@@ -30,50 +40,80 @@ SPECTRA_SCHEMA = pa.schema([
     ('time_index', pa.int32()),
     ('time_days', pa.float32()),
     ('angle_index', pa.int32()),
-    ('wavelength_rest', pa.list_(pa.float32())),
-    ('flux_rest', pa.list_(pa.float32())),
-])
+    ('flux_rest', pa.list_(pa.float32(), N_WAVELENGTHS)),
+]
+
+
+def build_schema(wavelength_grid_aa):
+    schema = pa.schema(SCHEMA_FIELDS)
+    return schema.with_metadata({
+        b'wavelength_rest_aa': wavelength_grid_aa.astype(np.float32).tobytes(),
+        b'wavelength_rest_n': str(wavelength_grid_aa.size).encode(),
+        b'wavelength_rest_dtype': b'float32',
+        b'wavelength_unit': b'angstrom',
+        b'flux_unit': b'erg s-1 cm-2 angstrom-1',
+    })
+
+
+def parse_spec_fast(filepath, n_times):
+    """Fast numpy text parser. Returns (lam_aa[N_WAVELENGTHS], flux[n_times, n_wave, n_angles])."""
+    data = np.loadtxt(filepath, comments='#', dtype=np.float32)
+    n_wavelengths = data.shape[0] // n_times
+    data = data.reshape(n_times, n_wavelengths, -1)
+    lam_aa = (0.5 * (data[0, :, 0] + data[0, :, 1]) * CM_TO_ANG).astype(np.float32)
+    flux = data[:, :, 2:]  # (n_times, n_wavelengths, n_angles)
+    return lam_aa, flux
+
+
+def _dict_string_column(value, n_rows):
+    """Single-value dictionary array matching pa.dictionary(int8, string)."""
+    indices = pa.array(np.zeros(n_rows, dtype=np.int8), type=pa.int8())
+    dictionary = pa.array([str(value)], type=pa.string())
+    return pa.DictionaryArray.from_arrays(indices, dictionary)
 
 
 @ray.remote
-def parse_file_to_table(filepath, file_metadata, time_days_lookup):
-    times_file, lam_AA, flux_cube = parse_spec(filepath)
-    n_times, n_wavelengths, n_angles = flux_cube.shape
+def parse_file_to_table(filepath, file_metadata, time_days_lookup, schema):
+    times = _read_header_times(filepath)
+    n_times = len(times)
+    lam_aa, flux = parse_spec_fast(filepath, n_times)
+    n_wavelengths, n_angles = flux.shape[1], flux.shape[2]
 
-    flux_per_cell = np.transpose(flux_cube, (0, 2, 1)).reshape(n_times * n_angles, n_wavelengths)
-    valid_mask = flux_per_cell > 0
-    cell_has_data = valid_mask.any(axis=1)
+    if n_wavelengths != N_WAVELENGTHS:
+        raise RuntimeError(f'{filepath}: expected {N_WAVELENGTHS} wavelength bins, got {n_wavelengths}')
 
-    time_grid, angle_grid = np.meshgrid(np.arange(n_times), np.arange(n_angles), indexing='ij')
-    time_indices_flat = time_grid.reshape(-1)[cell_has_data]
-    angle_indices_flat = angle_grid.reshape(-1)[cell_has_data]
-    valid_mask = valid_mask[cell_has_data]
-    flux_per_cell = flux_per_cell[cell_has_data].astype(np.float32)
-    lam_AA = lam_AA.astype(np.float32)
-
-    wavelength_lists = [lam_AA[mask].tolist() for mask in valid_mask]
-    flux_lists = [flux_per_cell[row][valid_mask[row]].tolist() for row in range(len(valid_mask))]
-
-    time_days_array = np.array(
-        [time_days_lookup.get(int(time_index), float(times_file[time_index])) for time_index in time_indices_flat],
+    # (n_times, n_wavelengths, n_angles) -> (n_times, n_angles, n_wavelengths) -> flat (rows, n_wavelengths)
+    flux_per_cell = np.ascontiguousarray(
+        np.transpose(flux, (0, 2, 1)).reshape(n_times * n_angles, n_wavelengths),
         dtype=np.float32,
     )
-    n_rows = len(time_indices_flat)
+    n_rows = flux_per_cell.shape[0]
 
-    return pa.Table.from_pydict({
-        'simulation_id': np.full(n_rows, int(file_metadata['simulation_id']), dtype=np.int64),
-        'run_type': [str(file_metadata['run_type'])] * n_rows,
-        'wind': [str(file_metadata['wind'])] * n_rows,
-        'mass_dynamical': np.full(n_rows, float(file_metadata['mass_dynamical']), dtype=np.float32),
-        'velocity_dynamical': np.full(n_rows, float(file_metadata['velocity_dynamical']), dtype=np.float32),
-        'mass_wind': np.full(n_rows, float(file_metadata['mass_wind']), dtype=np.float32),
-        'velocity_wind': np.full(n_rows, float(file_metadata['velocity_wind']), dtype=np.float32),
-        'time_index': time_indices_flat.astype(np.int32),
-        'time_days': time_days_array,
-        'angle_index': angle_indices_flat.astype(np.int32),
-        'wavelength_rest': wavelength_lists,
-        'flux_rest': flux_lists,
-    }, schema=SPECTRA_SCHEMA)
+    time_indices = np.repeat(np.arange(n_times, dtype=np.int32), n_angles)
+    angle_indices = np.tile(np.arange(n_angles, dtype=np.int32), n_times)
+
+    time_days_array = np.array(
+        [time_days_lookup.get(int(time_index), float(times[time_index])) for time_index in time_indices],
+        dtype=np.float32,
+    )
+
+    flux_values = pa.array(flux_per_cell.reshape(-1), type=pa.float32())
+    flux_fixed_list = pa.FixedSizeListArray.from_arrays(flux_values, n_wavelengths)
+
+    columns = {
+        'simulation_id': pa.array(np.full(n_rows, int(file_metadata['simulation_id']), dtype=np.int64)),
+        'run_type': _dict_string_column(file_metadata['run_type'], n_rows),
+        'wind': _dict_string_column(file_metadata['wind'], n_rows),
+        'mass_dynamical': pa.array(np.full(n_rows, float(file_metadata['mass_dynamical']), dtype=np.float32)),
+        'velocity_dynamical': pa.array(np.full(n_rows, float(file_metadata['velocity_dynamical']), dtype=np.float32)),
+        'mass_wind': pa.array(np.full(n_rows, float(file_metadata['mass_wind']), dtype=np.float32)),
+        'velocity_wind': pa.array(np.full(n_rows, float(file_metadata['velocity_wind']), dtype=np.float32)),
+        'time_index': pa.array(time_indices),
+        'time_days': pa.array(time_days_array),
+        'angle_index': pa.array(angle_indices),
+        'flux_rest': flux_fixed_list,
+    }
+    return pa.Table.from_pydict(columns, schema=schema), lam_aa
 
 
 def main():
@@ -105,13 +145,24 @@ def main():
     filepaths = list(file_metadata_lookup.keys())
     print(f'  catalog rows: {len(catalog):,}  files: {len(filepaths)}', flush=True)
 
+    # Bootstrap: parse one file to capture the wavelength grid for the schema metadata.
+    bootstrap_path = filepaths[0]
+    bootstrap_times = _read_header_times(bootstrap_path)
+    bootstrap_lam, _ = parse_spec_fast(bootstrap_path, len(bootstrap_times))
+    if bootstrap_lam.size != N_WAVELENGTHS:
+        raise RuntimeError(f'expected {N_WAVELENGTHS} wavelength bins, got {bootstrap_lam.size}')
+    schema = build_schema(bootstrap_lam)
+
     ray.init(num_cpus=arguments.num_cpus, ignore_reinit_error=True)
+    schema_ref = ray.put(schema)
 
     pending_futures = []
     filepath_iterator = iter(filepaths)
     for _ in range(min(arguments.max_in_flight, len(filepaths))):
         filepath = next(filepath_iterator)
-        pending_futures.append(parse_file_to_table.remote(filepath, file_metadata_lookup[filepath], time_days_lookup_per_file[filepath]))
+        pending_futures.append(parse_file_to_table.remote(
+            filepath, file_metadata_lookup[filepath], time_days_lookup_per_file[filepath], schema_ref,
+        ))
 
     writer = None
     files_done = 0
@@ -119,9 +170,11 @@ def main():
     try:
         while pending_futures:
             ready, pending_futures = ray.wait(pending_futures, num_returns=1)
-            table = ray.get(ready[0])
+            table, lam_aa = ray.get(ready[0])
+            if not np.array_equal(lam_aa, bootstrap_lam):
+                raise RuntimeError('wavelength grid mismatch between files; cannot share grid in schema metadata')
             if writer is None:
-                writer = pq.ParquetWriter(arguments.output, SPECTRA_SCHEMA, compression='zstd')
+                writer = pq.ParquetWriter(arguments.output, schema, compression='zstd')
             writer.write_table(table)
             files_done += 1
             total_rows += table.num_rows
@@ -129,7 +182,9 @@ def main():
 
             next_filepath = next(filepath_iterator, None)
             if next_filepath is not None:
-                pending_futures.append(parse_file_to_table.remote(next_filepath, file_metadata_lookup[next_filepath], time_days_lookup_per_file[next_filepath]))
+                pending_futures.append(parse_file_to_table.remote(
+                    next_filepath, file_metadata_lookup[next_filepath], time_days_lookup_per_file[next_filepath], schema_ref,
+                ))
     finally:
         if writer is not None:
             writer.close()

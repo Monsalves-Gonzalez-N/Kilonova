@@ -1,21 +1,36 @@
-"""Generate a parquet of LANL kilonova spectra attenuated by host + MW extinction.
+"""Generate a parquet of Roman AB photometry for LANL kilonova spectra
+attenuated by host + MW extinction, parallelized with Ray.
 
-All physics functions are taken verbatim from Extinction.ipynb (already validated).
-For each (LANL spectrum) x (redshift in the grid) we draw one realization of
-(Av_host, Rv_host, EBV_MW) and apply the full observational pipeline:
+Physics functions are taken verbatim from Extinction.ipynb (already validated).
+For each (cached LANL spectrum) x (redshift in the grid) we draw one realization
+of (Av_host, Rv_host, EBV_MW) and apply the full observational pipeline:
 
     rest spectrum --> F99 host extinction (Av_host, Rv_host)
                   --> redshift (specutils)
                   --> cosmological distance dimming (Planck18 luminosity distance)
                   --> F99 Milky Way extinction (Av_MW = Rv_MW * EBV_MW)
+                  --> synthetic Roman AB magnitudes via pyphot
 
-Output: one parquet row per (spectrum_id, redshift) with wavelength and flux as
-list<float64> columns (observer frame).
+STOP rules (validated in test_stop_rules.ipynb):
+    STOP-A (z-loop, patience=z_patience): track consecutive redshifts with no
+        detection across any (angle, time). Break the z-loop when the streak
+        reaches `z_patience`; a detection at any z resets the counter.
+    STOP-LC (per-band, within each (z, angle)): each Roman band keeps a counter
+        of consecutive non-detected decaying steps. The time axis truncates
+        when ALL bands reach `lc_patience`.
+Dust is sampled once per redshift and reused across all angles at that z
+(host galaxy fixed per redshift).
+
+Input: lanl_spectra.parquet built by cache_lanl_spectra.py (one row group per
+LANL .dat file, rest-frame flux as FixedSizeList<float32, 1024>).
+Output: one parquet row per evaluated (simulation, time, angle, redshift)
+with scalar AB magnitudes per Roman filter and the sampled dust parameters.
 """
 
 import argparse
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +38,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyphot
+import ray
 from astropy import constants as const
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -39,7 +55,7 @@ F99_VALID_RANGE = (1000.0, 33333.0)
 FLUX_UNIT = u.Unit('erg / (s cm2 AA)')
 CM_TO_ANG = (1 * u.cm).to(u.AA).value
 N_ANGLE_BINS = 54
-DEFAULT_KCOR_PATH = Path(__file__).resolve().parent.parent / 'kcor' / 'kcor_ROMAN.fits'
+DEFAULT_KCOR_PATH = Path(__file__).resolve().parent.parent.parent / 'kcor' / 'kcor_ROMAN.fits'
 
 _SPEC_PATTERN = re.compile(
     r'Run_(T[PS])_dyn_all_lanth_(wind\d)_all_'
@@ -340,118 +356,215 @@ def build_redshift_grid(redshift_min, redshift_max, number_of_redshifts, spacing
     raise ValueError(f'unknown spacing: {spacing!r}')
 
 
-def select_spectrum_ids(catalog, max_spectra, random_seed):
-    if max_spectra is None or max_spectra >= len(catalog):
-        return catalog.index.to_numpy()
+def select_row_group_indices(parquet_path, max_row_groups, random_seed):
+    """Optional row-group subsampling for smoke tests."""
+    pf = pq.ParquetFile(parquet_path)
+    total = pf.num_row_groups
+    if max_row_groups is None or max_row_groups >= total:
+        return list(range(total))
     rng = np.random.default_rng(random_seed)
-    return np.sort(rng.choice(catalog.index.to_numpy(), size=max_spectra, replace=False))
+    return sorted(int(i) for i in rng.choice(total, size=max_row_groups, replace=False))
 
 
-def _is_detected_in_any_band(ab_magnitudes, detection_mag_limit):
-    for magnitude in ab_magnitudes.values():
-        if np.isfinite(magnitude) and magnitude <= detection_mag_limit:
-            return True
-    return False
+def _presample_dust(z_grid, av_pool, rv_pool, ebv_pool, seed):
+    """One dust draw per redshift, shared across all angles at that z."""
+    n_z = len(z_grid)
+    rng = np.random.default_rng(seed)
+    av_arr = rng.choice(np.asarray(av_pool, dtype=float), size=n_z)
+    rv_arr = rng.choice(np.asarray(rv_pool, dtype=float), size=n_z)
+    ebv_arr = rng.choice(np.asarray(ebv_pool, dtype=float), size=n_z)
+    return av_arr, rv_arr, ebv_arr
 
 
-def iterate_attenuated_rows(
-    catalog,
-    spectrum_ids,
+def _transmission(wl_aa, av, rv):
+    """F99 transmission curve over wl_aa; 1.0 outside F99 valid range."""
+    model = F99(Rv=float(rv))
+    t = np.ones(len(wl_aa))
+    mask = (wl_aa >= F99_VALID_RANGE[0]) & (wl_aa <= F99_VALID_RANGE[1])
+    if mask.any():
+        t[mask] = model.extinguish(wl_aa[mask] * u.AA, Av=float(av))
+    return t
+
+
+def _mags_batch(wl_obs_aa, flux_matrix, roman_filters):
+    """Batch AB magnitudes for (n_t, n_wl) flux at fixed observed wavelengths."""
+    wl_u = wl_obs_aa * pyphot.config.units.U('AA')
+    flux_u = flux_matrix * pyphot.config.units.U('flam')
+    n_t = flux_matrix.shape[0]
+    mags = np.full((n_t, len(roman_filters)), np.nan)
+    for f_idx, (_fn, fd) in enumerate(roman_filters.items()):
+        pyf = fd['filter']
+        fnu = pyf.get_flux(wl_u, flux_u, axis=-1)
+        fval = np.asarray(getattr(fnu, 'magnitude', fnu.value), dtype=float).ravel()
+        good = (fval > 0) & np.isfinite(fval)
+        mags[good, f_idx] = -2.5 * np.log10(fval[good]) - pyf.AB_zero_mag
+    return mags
+
+
+def _lc_stop_idx_perband(mags, mag_limit, patience):
+    """Per-band STOP-LC truncation index; keep mags[:result].
+
+    Each band keeps a counter of consecutive non-detected steps in decay.
+    The truncation fires when ALL bands reach `patience`. Decay rule
+    between consecutive steps for band b:
+        finite prev, finite curr -> in_decay iff curr > prev (fainter)
+        finite prev, NaN  curr   -> in_decay (band dropped off)
+        NaN   prev, finite curr  -> NOT in_decay (band came online)
+        NaN   prev, NaN   curr   -> in_decay (stayed off)
+    Detected steps reset the counter for that band.
+    """
+    n_t, n_f = mags.shape
+    count = np.zeros(n_f, dtype=int)
+    prev = np.full(n_f, np.nan)
+    for i in range(n_t):
+        curr = mags[i]
+        if i == 0:
+            prev = curr
+            continue
+        detected_b = np.isfinite(curr) & (curr <= mag_limit)
+        fp, fc = np.isfinite(prev), np.isfinite(curr)
+        in_decay = np.where(
+            fp & fc, curr > prev,
+            np.where(fp & ~fc, True,
+                     np.where(~fp & fc, False, True))
+        )
+        advance = (~detected_b) & in_decay
+        count = np.where(detected_b, 0,
+                np.where(advance, count + 1, count))
+        prev = curr
+        if (count >= patience).all():
+            return i + 1
+    return n_t
+
+
+def process_row_group(
+    parquet_path,
+    row_group_index,
     redshift_grid,
     av_pool,
     rv_pool,
     ebv_pool,
-    roman_filters,
-    random_seed,
+    kcor_path,
     detection_mag_limit,
+    lc_patience,
+    z_patience,
+    worker_seed,
 ):
-    rng = np.random.default_rng(random_seed)
-    selected_ids = set(int(value) for value in spectrum_ids)
-    catalog_subset = catalog.loc[catalog.index.isin(selected_ids)]
+    """Apply the full extinction pipeline to one cached row group.
+
+    Loop order: redshift (near->far) -> angle -> time (vectorised batch).
+    Dust is sampled once per redshift and shared across all angles at that z.
+    STOP-LC truncates the time axis per (z, angle); STOP-A breaks the z-loop
+    after `z_patience` consecutive redshifts with no detection at any angle.
+    """
+    roman_filters = load_roman_filters(kcor_path)
     filter_names = list(roman_filters.keys())
-    redshift_grid_sorted = np.sort(np.asarray(redshift_grid, dtype=float))
+    n_filters = len(filter_names)
 
-    for filepath, file_catalog in catalog_subset.groupby('filepath'):
-        times_file, lam_AA, flux_cube = parse_spec(filepath)
+    pf = pq.ParquetFile(parquet_path)
+    lam_aa = np.frombuffer(
+        pf.schema_arrow.metadata[b'wavelength_rest_aa'],
+        dtype=np.float32,
+    ).astype(np.float64)
 
-        for angle_index, angle_catalog in file_catalog.groupby('angle_index'):
-            angle_catalog_sorted = angle_catalog.sort_values('time_index')
-            stop_light_curve = False
+    table = pf.read_row_group(row_group_index)
+    df = table.to_pandas()
 
-            for spectrum_id, row in angle_catalog_sorted.iterrows():
-                if stop_light_curve:
-                    break
+    z_sorted = np.sort(np.asarray(redshift_grid, dtype=float))
+    av_arr, rv_arr, ebv_arr = _presample_dust(
+        z_sorted, av_pool, rv_pool, ebv_pool, worker_seed
+    )
 
-                time_index = int(row['time_index'])
-                spectrum_slice = flux_cube[time_index, :, int(angle_index)]
-                valid_mask = spectrum_slice > 0
-                if not valid_mask.any():
-                    continue
-                wavelength_rest = lam_AA[valid_mask]
-                flux_rest = spectrum_slice[valid_mask]
+    lum_dist_pc = Planck18.luminosity_distance(z_sorted).to(u.pc).value
+    lum_dist_pc = np.where(z_sorted > 0, lum_dist_pc, 10.0)
 
-                detected_at_smallest_redshift = False
+    mag_limit_arr = np.full(n_filters, float(detection_mag_limit))
 
-                for redshift in redshift_grid_sorted:
-                    av_host = float(rng.choice(av_pool))
-                    rv_host = float(rng.choice(rv_pool))
-                    ebv_mw = float(rng.choice(ebv_pool))
+    angles = sorted(int(a) for a in df['angle_index'].unique())
+    per_angle = {}
+    for angle_index in angles:
+        grp = (df[df['angle_index'] == angle_index]
+               .sort_values('time_index').reset_index(drop=True))
+        per_angle[angle_index] = dict(
+            t_indices=grp['time_index'].values.astype(int),
+            t_days=grp['time_days'].values.astype(float),
+            flux_mat=np.maximum(
+                np.array(grp['flux_rest'].tolist(), dtype=np.float64), 0.0
+            ),
+            meta=grp.iloc[0],
+        )
 
-                    observed = generate_observed_kilonova_spectrum(
-                        wavelength_rest=wavelength_rest,
-                        spectrum_input=flux_rest,
-                        extinction_av_host=av_host,
-                        extinction_rv_host=rv_host,
-                        redshift=float(redshift),
-                        ebv_milky_way=ebv_mw,
-                    )
-                    parameters = observed['parameters']
+    output_rows = []
+    z_miss_streak = 0
 
-                    ab_magnitudes = compute_roman_ab_magnitudes(
-                        observed['wavelength_observed'],
-                        observed['flux_observed'],
-                        roman_filters,
-                    )
+    for z_idx, redshift in enumerate(z_sorted):
+        av_host = float(av_arr[z_idx])
+        rv_host = float(rv_arr[z_idx])
+        ebv_mw = float(ebv_arr[z_idx])
+        av_mw = MILKY_WAY_RV * ebv_mw
 
-                    detected = _is_detected_in_any_band(ab_magnitudes, detection_mag_limit)
+        trans_host = _transmission(lam_aa, av_host, rv_host)
+        wl_obs = lam_aa * (1.0 + float(redshift))
+        trans_mw = _transmission(wl_obs, av_mw, MILKY_WAY_RV)
+        dim = (10.0 / float(lum_dist_pc[z_idx])) ** 2
 
-                    output_row = {
-                        'spectrum_id': int(spectrum_id),
-                        'simulation_id': int(row['simulation_id']),
-                        'run_type': str(row['run_type']),
-                        'wind': str(row['wind']),
-                        'mass_dynamical': float(row['mass_dynamical']),
-                        'velocity_dynamical': float(row['velocity_dynamical']),
-                        'mass_wind': float(row['mass_wind']),
-                        'velocity_wind': float(row['velocity_wind']),
-                        'time_index': time_index,
-                        'time_days': float(row['time_days']),
-                        'angle_index': int(angle_index),
-                        'redshift': float(redshift),
-                        'av_host': av_host,
-                        'rv_host': rv_host,
-                        'ebv_milky_way': ebv_mw,
-                        'av_milky_way': parameters['extinction_av_milky_way'],
-                        'luminosity_distance_parsec': parameters['luminosity_distance_parsec'],
-                        'detected': bool(detected),
-                    }
-                    for filter_name in filter_names:
-                        output_row[f'mag_ab_{filter_name}'] = float(ab_magnitudes[filter_name])
-                    yield output_row
+        any_detected_at_z = False
 
-                    if redshift == redshift_grid_sorted[0]:
-                        detected_at_smallest_redshift = detected
+        for angle_index in angles:
+            data = per_angle[angle_index]
+            flux_obs = (data['flux_mat'] * trans_host
+                        * (dim / (1.0 + float(redshift))) * trans_mw)
+            mags = _mags_batch(wl_obs, flux_obs, roman_filters)
+            detected = np.any(np.isfinite(mags) & (mags <= mag_limit_arr), axis=1)
 
-                    if not detected:
-                        break
+            stop_idx = _lc_stop_idx_perband(mags, mag_limit_arr, lc_patience)
+            if stop_idx == 0:
+                continue
+            if detected[:stop_idx].any():
+                any_detected_at_z = True
 
-                if not detected_at_smallest_redshift:
-                    stop_light_curve = True
+            meta = data['meta']
+            t_indices = data['t_indices'][:stop_idx]
+            t_days = data['t_days'][:stop_idx]
+            for j in range(stop_idx):
+                row_out = {
+                    'simulation_id': int(meta['simulation_id']),
+                    'run_type': str(meta['run_type']),
+                    'wind': str(meta['wind']),
+                    'mass_dynamical': float(meta['mass_dynamical']),
+                    'velocity_dynamical': float(meta['velocity_dynamical']),
+                    'mass_wind': float(meta['mass_wind']),
+                    'velocity_wind': float(meta['velocity_wind']),
+                    'time_index': int(t_indices[j]),
+                    'time_days': float(t_days[j]),
+                    'angle_index': int(angle_index),
+                    'redshift': float(redshift),
+                    'av_host': av_host,
+                    'rv_host': rv_host,
+                    'ebv_milky_way': ebv_mw,
+                    'av_milky_way': float(av_mw),
+                    'luminosity_distance_parsec': float(lum_dist_pc[z_idx]),
+                    'detected': bool(detected[j]),
+                }
+                for f_idx, filter_name in enumerate(filter_names):
+                    row_out[f'mag_ab_{filter_name}'] = float(mags[j, f_idx])
+                output_rows.append(row_out)
+
+        if any_detected_at_z:
+            z_miss_streak = 0
+        else:
+            z_miss_streak += 1
+            if z_miss_streak >= z_patience:
+                break
+
+    return output_rows
+
+
+_process_row_group_remote = ray.remote(process_row_group)
 
 
 def build_parquet_schema(filter_names):
     fields = [
-        ('spectrum_id', pa.int64()),
         ('simulation_id', pa.int64()),
         ('run_type', pa.string()),
         ('wind', pa.string()),
@@ -475,43 +588,111 @@ def build_parquet_schema(filter_names):
     return pa.schema(fields)
 
 
-def write_dataset(row_iterator, output_path, batch_size, schema):
+def run_parallel(
+    spectra_cache_path,
+    output_path,
+    redshift_grid,
+    av_pool,
+    rv_pool,
+    ebv_pool,
+    kcor_path,
+    detection_mag_limit,
+    lc_patience,
+    z_patience,
+    num_workers,
+    random_seed,
+    row_group_indices,
+    max_in_flight_multiplier=2,
+):
+    roman_filters = load_roman_filters(kcor_path)
+    filter_names = list(roman_filters.keys())
+    schema = build_parquet_schema(filter_names)
+
+    ray.init(num_cpus=num_workers, ignore_reinit_error=True, log_to_driver=False)
+    av_ref = ray.put(np.asarray(av_pool, dtype=float))
+    rv_ref = ray.put(np.asarray(rv_pool, dtype=float))
+    ebv_ref = ray.put(np.asarray(ebv_pool, dtype=float))
+    redshift_ref = ray.put(np.asarray(redshift_grid, dtype=float))
+
+    max_in_flight = max(num_workers * max_in_flight_multiplier, num_workers)
+    iterator = iter(row_group_indices)
+    pending = []
+    future_to_rg = {}
+
+    def submit(rg_index):
+        worker_seed = int(random_seed) * 1_000_003 + int(rg_index)
+        future = _process_row_group_remote.remote(
+            str(spectra_cache_path),
+            int(rg_index),
+            redshift_ref,
+            av_ref,
+            rv_ref,
+            ebv_ref,
+            str(kcor_path),
+            float(detection_mag_limit),
+            int(lc_patience),
+            int(z_patience),
+            worker_seed,
+        )
+        future_to_rg[future] = int(rg_index)
+        pending.append(future)
+
+    for _ in range(min(max_in_flight, len(row_group_indices))):
+        try:
+            submit(next(iterator))
+        except StopIteration:
+            break
+
     writer = None
-    batch = []
     total_rows = 0
+    files_done = 0
+    n_total = len(row_group_indices)
+    start_time = time.perf_counter()
+
     try:
-        for row in row_iterator:
-            batch.append(row)
-            if len(batch) >= batch_size:
-                table = pa.Table.from_pylist(batch, schema=schema)
+        while pending:
+            ready, pending = ray.wait(pending, num_returns=1)
+            future = ready[0]
+            rg_index = future_to_rg.pop(future)
+            rows = ray.get(future)
+            files_done += 1
+
+            num_rows_this = 0
+            if rows:
+                table = pa.Table.from_pylist(rows, schema=schema)
                 if writer is None:
                     writer = pq.ParquetWriter(output_path, schema, compression='zstd')
                 writer.write_table(table)
-                total_rows += len(batch)
-                print(f'  wrote {total_rows} rows', flush=True)
-                batch = []
-        if batch:
-            table = pa.Table.from_pylist(batch, schema=schema)
-            if writer is None:
-                writer = pq.ParquetWriter(output_path, schema, compression='zstd')
-            writer.write_table(table)
-            total_rows += len(batch)
-            print(f'  wrote {total_rows} rows', flush=True)
+                num_rows_this = table.num_rows
+                total_rows += num_rows_this
+
+            elapsed = time.perf_counter() - start_time
+            rate = files_done / elapsed if elapsed > 0 else 0.0
+            eta_h = ((n_total - files_done) / rate / 3600.0) if rate > 0 else float('inf')
+            print(
+                f'  [{files_done}/{n_total}] rg={rg_index} +{num_rows_this} rows '
+                f'-> {total_rows:,} total | {rate*3600:.0f} rg/h | ETA {eta_h:.2f} h',
+                flush=True,
+            )
+
+            try:
+                submit(next(iterator))
+            except StopIteration:
+                pass
     finally:
         if writer is not None:
             writer.close()
+        ray.shutdown()
+
     return total_rows
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     script_directory = Path(__file__).resolve().parent
-    parser.add_argument('--lanl-dir', type=Path,
-                        default=script_directory / 'kn_sim_cube_v1',
-                        help='Directory containing LANL *_spec_*.dat files (relative to the script by default).')
-    parser.add_argument('--catalog-path', type=Path,
-                        default=script_directory / 'lanl_catalog.parquet',
-                        help='Path to the LANL catalog parquet. Built from --lanl-dir if missing.')
+    parser.add_argument('--spectra-cache', type=Path,
+                        default=script_directory / 'lanl_spectra.parquet',
+                        help='Cached rest-frame spectra parquet built by cache_lanl_spectra.py.')
     parser.add_argument('--hourglass-parquet', type=Path,
                         default=script_directory / 'hourglass_objects.parquet',
                         help='Hourglass objects parquet (used to sample Milky Way E(B-V) at real survey coordinates).')
@@ -520,36 +701,40 @@ def main():
                         help='Output parquet path.')
     parser.add_argument('--kcor-path', type=Path, default=DEFAULT_KCOR_PATH,
                         help='SNANA kcor FITS with Roman FilterTrans extension.')
-    parser.add_argument('--detection-mag-limit', type=float, default=27.0,
-                        help='AB-mag faint limit; STOP triggers when no band reaches this depth.')
+    parser.add_argument('--detection-mag-limit', type=float, default=28.0,
+                        help='AB-mag faint limit used for STOP rules (uniform across Roman bands).')
 
-    parser.add_argument('--redshift-min', type=float, default=0.01)
-    parser.add_argument('--redshift-max', type=float, default=0.5)
-    parser.add_argument('--n-redshift', type=int, default=20)
+    parser.add_argument('--redshift-min', type=float, default=0.003)
+    parser.add_argument('--redshift-max', type=float, default=1.0)
+    parser.add_argument('--n-redshift', type=int, default=50)
     parser.add_argument('--redshift-spacing', choices=('linear', 'log'), default='linear')
 
-    parser.add_argument('--max-spectra', type=int, default=None,
-                        help='If set, randomly subsample this many LANL spectra (otherwise use all).')
+    parser.add_argument('--lc-patience', type=int, default=3,
+                        help='Per-band consecutive non-detected decaying steps before STOP-LC truncates the (z, angle) light curve.')
+    parser.add_argument('--z-patience', type=int, default=3,
+                        help='Consecutive redshifts with no detection at any (angle, time) before STOP-A breaks the z-loop.')
+
+    parser.add_argument('--num-workers', type=int, default=32,
+                        help='Number of Ray workers (one task per row group at a time).')
+    parser.add_argument('--max-in-flight-multiplier', type=int, default=2,
+                        help='Max in-flight ray tasks = num-workers * this multiplier.')
+    parser.add_argument('--max-row-groups', type=int, default=None,
+                        help='If set, only process this many row groups (smoke test).')
     parser.add_argument('--n-pool-samples', type=int, default=10000,
                         help='Pool size for Av/Rv/EBV samplers.')
-    parser.add_argument('--batch-size', type=int, default=500,
-                        help='Rows per parquet write batch.')
     parser.add_argument('--random-seed', type=int, default=42)
 
     arguments = parser.parse_args()
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
 
-    print('Building / loading LANL catalog...', flush=True)
-    if not arguments.catalog_path.exists() and not arguments.lanl_dir.exists():
+    if not arguments.spectra_cache.exists():
         raise FileNotFoundError(
-            f'Neither catalog ({arguments.catalog_path}) nor LANL grid directory '
-            f'({arguments.lanl_dir}) exists. Mount the external drive or provide '
-            f'a prebuilt catalog parquet.'
+            f'Spectra cache not found at {arguments.spectra_cache}. '
+            f'Run cache_lanl_spectra.py first.'
         )
-    catalog = load_lanl_catalog(arguments.catalog_path, arguments.lanl_dir)
-    print(f'  catalog rows: {len(catalog):,}', flush=True)
 
+    print(f'Spectra cache: {arguments.spectra_cache}', flush=True)
     print(f'Loading Roman filters from {arguments.kcor_path}...', flush=True)
     roman_filters = load_roman_filters(arguments.kcor_path)
     filter_names = list(roman_filters.keys())
@@ -564,7 +749,7 @@ def main():
         number_of_samples=arguments.n_pool_samples,
         random_seed=arguments.random_seed,
     )
-    ebv_pool = hourglass['ebv_samples']
+    ebv_pool = np.asarray(hourglass['ebv_samples'], dtype=float)
     print(f'  Av median = {np.median(av_pool):.3f}  '
           f'Rv median = {np.median(rv_pool):.3f}  '
           f'EBV_MW median = {np.median(ebv_pool):.4f}', flush=True)
@@ -576,27 +761,39 @@ def main():
         arguments.redshift_spacing,
     )
     print(f'Redshift grid ({arguments.redshift_spacing}, N={len(redshift_grid)}): '
-          f'{redshift_grid[0]:.4f} - {redshift_grid[-1]:.4f}', flush=True)
+          f'{redshift_grid[0]:.4f} -> {redshift_grid[-1]:.4f}', flush=True)
 
-    spectrum_ids = select_spectrum_ids(catalog, arguments.max_spectra, arguments.random_seed)
-    expected_rows = len(spectrum_ids) * len(redshift_grid)
-    print(f'Generating {len(spectrum_ids):,} spectra x {len(redshift_grid)} redshifts '
-          f'= {expected_rows:,} rows -> {arguments.output}', flush=True)
+    row_group_indices = select_row_group_indices(
+        arguments.spectra_cache,
+        arguments.max_row_groups,
+        arguments.random_seed,
+    )
+    total_rg = pq.ParquetFile(arguments.spectra_cache).num_row_groups
+    print(f'Processing {len(row_group_indices)} row groups (of {total_rg} total)',
+          flush=True)
 
-    row_iterator = iterate_attenuated_rows(
-        catalog=catalog,
-        spectrum_ids=spectrum_ids,
+    print(f'STOP rules: STOP-A patience={arguments.z_patience} (z-loop across all angles); '
+          f'STOP-LC per-band patience={arguments.lc_patience} in decay; '
+          f'mag-limit={arguments.detection_mag_limit}', flush=True)
+    print(f'Launching Ray with {arguments.num_workers} workers -> {arguments.output}',
+          flush=True)
+
+    total = run_parallel(
+        spectra_cache_path=arguments.spectra_cache,
+        output_path=arguments.output,
         redshift_grid=redshift_grid,
         av_pool=av_pool,
         rv_pool=rv_pool,
         ebv_pool=ebv_pool,
-        roman_filters=roman_filters,
-        random_seed=arguments.random_seed,
+        kcor_path=arguments.kcor_path,
         detection_mag_limit=arguments.detection_mag_limit,
+        lc_patience=arguments.lc_patience,
+        z_patience=arguments.z_patience,
+        num_workers=arguments.num_workers,
+        random_seed=arguments.random_seed,
+        row_group_indices=row_group_indices,
+        max_in_flight_multiplier=arguments.max_in_flight_multiplier,
     )
-
-    schema = build_parquet_schema(filter_names)
-    total = write_dataset(row_iterator, arguments.output, arguments.batch_size, schema)
     print(f'Done. Wrote {total:,} rows to {arguments.output}', flush=True)
 
 
