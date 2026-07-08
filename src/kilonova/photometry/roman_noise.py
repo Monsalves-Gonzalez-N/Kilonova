@@ -19,9 +19,9 @@ Everything is traceable to galsim.roman except the read noise (Rose et al. 2025,
 eq. 9, up-the-ramp) and the PSF NEA (Rose et al. 2025, Table 3).
 """
 
+from functools import lru_cache
+
 import numpy as np
-import galsim
-import galsim.roman as roman
 
 SNR_DETECTION = 5.0
 ZP_JITTER_SIGMA = 0.15  # mag, FOV scatter of the zeropoint (Rose et al. 2025, eq. 8)
@@ -65,10 +65,33 @@ READ_RAMP_VARIANCE = 12 * 16 ** 2  # = 3072 e-^2
 PSF_NEA_PIX = {"R062": 5.575, "Z087": 6.695, "Y106": 7.895,
                "J129": 9.210, "H158": 11.140, "F184": 16.335}
 
-ROMAN_BANDPASSES = roman.getBandpasses()
-COLLECTING_AREA_CM2 = roman.collecting_area
-ROMAN_ZEROPOINT = {band: ROMAN_BANDPASSES[band].zeropoint
-                   for band in ALL_BANDS_BY_WAVELENGTH if band in ROMAN_BANDPASSES}
+@lru_cache(maxsize=1)
+def _galsim_roman():
+    """galsim is a conda-forge-only dependency; imported lazily so the modules that
+    do not touch photometry (datasets, configs) work in galsim-free environments."""
+    import galsim
+    import galsim.roman as roman
+
+    return galsim, roman
+
+
+@lru_cache(maxsize=1)
+def roman_bandpasses():
+    _, roman = _galsim_roman()
+    return roman.getBandpasses()
+
+
+@lru_cache(maxsize=1)
+def collecting_area_cm2():
+    _, roman = _galsim_roman()
+    return roman.collecting_area
+
+
+@lru_cache(maxsize=1)
+def roman_zeropoint():
+    bandpasses = roman_bandpasses()
+    return {band: bandpasses[band].zeropoint
+            for band in ALL_BANDS_BY_WAVELENGTH if band in bandpasses}
 
 
 def read_noise_electrons(exposure_time):
@@ -93,18 +116,20 @@ def build_tier_constants(tier, field_seed=FIELD_SEED):
     """Per-tier constants of the error recipe derived from galsim.roman at the tier's exposure
     times: bands, AB zeropoint, NEA-weighted background noise floor, chosen field. The noise
     floor is the background term NEA*(sky + thermal*t + dark*t + read^2), fixed per band."""
+    galsim, roman = _galsim_roman()
+    bandpasses = roman_bandpasses()
     exposure_time = EXPOSURE_TIME_BY_TIER[tier]
     anchor_band = TIER_ANCHOR_BAND[tier]
     bands = [band for band in ALL_BANDS_BY_WAVELENGTH if band in exposure_time]
     field_name, field_ra, field_dec = field_center_for_tier(tier, np.random.default_rng(field_seed))
     field_world_position = galsim.CelestialCoord(field_ra * galsim.degrees, field_dec * galsim.degrees)
 
-    zeropoint = {band: ROMAN_BANDPASSES[band].zeropoint for band in bands}
+    zeropoint = {band: bandpasses[band].zeropoint for band in bands}
     noise_floor_variance = {}
     for band in bands:
         exposure = exposure_time[band]
         # getSkyLevel returns e-/arcsec^2 -> e-/pixel via pixel_scale^2 before summing per-pixel terms.
-        sky_level = roman.getSkyLevel(ROMAN_BANDPASSES[band], world_pos=field_world_position,
+        sky_level = roman.getSkyLevel(bandpasses[band], world_pos=field_world_position,
                                       exptime=exposure) * roman.pixel_scale ** 2
         read_noise = read_noise_electrons(exposure)
         background_per_pixel = (sky_level + roman.thermal_backgrounds[band] * exposure
@@ -118,7 +143,7 @@ def build_tier_constants(tier, field_seed=FIELD_SEED):
 def source_flux_electrons(mag_true, exposure, zeropoint):
     """Source counts [e-] of an AB magnitude over `exposure` s. Scalar or array; the zeropoint
     may carry the per-epoch FOV jitter (Rose et al. 2025, eq. 8) that moves the SNR."""
-    return exposure * COLLECTING_AREA_CM2 * 10 ** (-0.4 * (mag_true - zeropoint))
+    return exposure * collecting_area_cm2() * 10 ** (-0.4 * (mag_true - zeropoint))
 
 
 def flux_error_electrons(flux_electrons, noise_floor_variance):
@@ -130,7 +155,7 @@ def flux_error_electrons(flux_electrons, noise_floor_variance):
 def limiting_magnitude_5sigma(flux_error, exposure, zeropoint, snr=SNR_DETECTION):
     """5-sigma limiting AB mag for a source whose error is `flux_error`, consistent with the
     (possibly jittered) zeropoint of that epoch."""
-    limiting_rate = snr * flux_error / exposure / COLLECTING_AREA_CM2
+    limiting_rate = snr * flux_error / exposure / collecting_area_cm2()
     return zeropoint - 2.5 * np.log10(limiting_rate)
 
 

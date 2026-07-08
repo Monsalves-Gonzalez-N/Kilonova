@@ -30,7 +30,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-import generate_early_windows as gew
+from kilonova.simulation import early_windows as gew
 
 SOURCE_DIR = "/Volumes/T7/openuniverse2025"
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))

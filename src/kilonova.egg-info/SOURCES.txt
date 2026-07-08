@@ -5,3 +5,14 @@ src/kilonova.egg-info/SOURCES.txt
 src/kilonova.egg-info/dependency_links.txt
 src/kilonova.egg-info/requires.txt
 src/kilonova.egg-info/top_level.txt
+src/kilonova/cli/__init__.py
+src/kilonova/cli/run_all_openuniverse.py
+src/kilonova/datasets/__init__.py
+src/kilonova/datasets/openuniverse.py
+src/kilonova/photometry/__init__.py
+src/kilonova/photometry/roman_noise.py
+src/kilonova/photometry/spectra.py
+src/kilonova/simulation/__init__.py
+src/kilonova/simulation/early_windows.py
+src/kilonova/simulation/extinction.py
+src/kilonova/simulation/lanl_cache.py

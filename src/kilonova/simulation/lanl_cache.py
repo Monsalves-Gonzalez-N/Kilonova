@@ -20,7 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 
-from generate_extinguished_spectra import (
+from kilonova.simulation.extinction import (
     CM_TO_ANG,
     _read_header_times,
     load_lanl_catalog,

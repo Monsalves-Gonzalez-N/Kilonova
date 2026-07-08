@@ -9,17 +9,17 @@ import pyarrow.parquet as pq
 
 # Receta de error fotometrico Roman (fuente unica de verdad). Constantes y primitivas se importan de
 # aqui en vez de redefinirlas, para que pipeline y notebooks no se desincronicen.
-from roman_photometry import (
+from kilonova.photometry.roman_noise import (
     SNR_DETECTION, ZP_JITTER_SIGMA, FIELD_SEED,
     EXPOSURE_TIME_BY_TIER, BASE_CADENCE_DAYS, TIER_ANCHOR_BAND, ALL_BANDS_BY_WAVELENGTH,
     HLTDS_FIELD_CENTER, HLTDS_FIELDS_BY_TIER, PSF_NEA_PIX,
-    COLLECTING_AREA_CM2,
+    collecting_area_cm2,
     read_noise_electrons, field_center_for_tier, build_tier_constants,
     source_flux_electrons, flux_error_electrons, limiting_magnitude_5sigma,
     epochs_from_first_detection, cadence_schedule,
 )
 # Receta de fotometria sintetica de kilonovas (SED LANL -> mag AB Roman), validada en el dataloader.
-from kilonova_spectra import ALL_ROMAN_BANDS, magnitudes_for_bands
+from kilonova.photometry.spectra import ALL_ROMAN_BANDS, magnitudes_for_bands
 
 # Todo el pipeline vive en esta carpeta: hdf5 de entrada (OpenUniverse), catalogo y HDF5 de salida.
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -183,7 +183,7 @@ def build_window_from_model(object_id, model, constants, redshift, gentype,
                 row["mag_limit_5sigma"] = limiting_magnitude_5sigma(flux_error, exposure, zeropoint)
                 if flux_observed > 0:
                     row["mag_observed"] = zeropoint - 2.5 * np.log10(flux_observed / exposure
-                                                                     / COLLECTING_AREA_CM2)
+                                                                     / collecting_area_cm2())
                 else:
                     row["mag_observed"] = row["mag_limit_5sigma"]
             rows.append(row)

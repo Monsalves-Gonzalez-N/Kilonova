@@ -10,12 +10,11 @@ The Roman bandpasses are reused from roman_photometry to keep one definition of 
 """
 
 import numpy as np
-import galsim
 from astropy import units as u
 from astropy.cosmology import Planck18
 from specutils import Spectrum
 
-from roman_photometry import ROMAN_BANDPASSES
+from kilonova.photometry.roman_noise import roman_bandpasses
 
 FLUX_UNIT = u.Unit("erg / (s cm2 AA)")
 INTRINSIC_DISTANCE_PARSEC = 10.0  # the LANL flux_rest is the absolute flux of the source at 10 pc
@@ -45,6 +44,8 @@ def spectrum_to_roman_magnitudes(wavelength_observed_aa, flux_observed_lambda, b
     """AB magnitude per band integrating the (already observed-frame) spectrum through the galsim.roman
     bandpasses. NaN in a band the spectrum does not cover (e.g. the blue edge at high z). Expects the
     spectrum already masked to flux > 0 (see magnitudes_for_bands for the masking convenience)."""
+    import galsim
+
     order = np.argsort(wavelength_observed_aa)
     spectral_energy_distribution = galsim.SED(
         galsim.LookupTable(wavelength_observed_aa[order], flux_observed_lambda[order], interpolant="linear"),
@@ -52,7 +53,7 @@ def spectrum_to_roman_magnitudes(wavelength_observed_aa, flux_observed_lambda, b
     )
     magnitudes = {}
     for band in bands:
-        bandpass = ROMAN_BANDPASSES[band]
+        bandpass = roman_bandpasses()[band]
         covered = (wavelength_observed_aa.min() <= bandpass.blue_limit * 10
                    and wavelength_observed_aa.max() >= bandpass.red_limit * 10)
         magnitudes[band] = (float(spectral_energy_distribution.calculateMagnitude(bandpass))
