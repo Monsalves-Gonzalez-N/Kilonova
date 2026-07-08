@@ -1,0 +1,12 @@
+# Slim CI environment: galsim (conda-forge-only) + the pip package with dev extras.
+# No ray/pyphot/dustmaps: the tests that need them skip via importorskip.
+name: kilonova-ci
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - galsim
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cpu
+      - -e .[dev]

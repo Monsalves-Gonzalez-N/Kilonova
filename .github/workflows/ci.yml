@@ -16,3 +16,15 @@ jobs:
       - run: pip install ruff
       - run: ruff check src tests
       - run: ruff format --check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-file: environment-ci.yml
+          cache-environment: true
+      - name: Run tests
+        shell: bash -el {0}
+        run: pytest -v
