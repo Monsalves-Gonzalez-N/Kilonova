@@ -35,3 +35,9 @@ data/dust_generation/dustmaps/
 # Local scratch / benchmarks
 data/dust_generation/_bench_*.py
 data/dust_generation/_sanity_*.py
+
+# OpenUniverse early-windows pipeline — large inputs/outputs (regenerated / downloaded separately)
+data/openuniverse/*.hdf5
+data/openuniverse/*.parquet
+data/openuniverse/*.fits
+data/openuniverse/*.fits.gz

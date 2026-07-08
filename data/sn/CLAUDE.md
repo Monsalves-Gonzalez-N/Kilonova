@@ -73,7 +73,7 @@ con `n_pix = NEA` para fotometría PSF de fuente puntual (King 1983; Naylor 1998
 
 ### Noise model (Sec 2.3)
 - **ZP per row**: `ZP_AVG = ZP + 2.5·log₁₀(t_exp)` + Gaussian scatter σ=0.15 mag (FOV-dependent). Both effects already absorbed into the parquet's `zp` column (eq 8).
-- **Read noise**: `σ_read = √(σ²_floor + σ²·(n−1)/(n+1))`, n=t_exp/3.04, σ²_floor=25, σ²=12·16²=3072 (eq 9).
+- **Read noise**: `σ_read = √(σ²_floor + σ²·(n−1)/(n(n+1)))`, n=t_exp/3.04, σ²_floor=25, σ²=12·16²=3072 (eq 9). Denominador es `n(n+1)`, NO `(n+1)`: verificado contra paper p.7 y Table 3 (F DEEP, t=900s, n=296 → 5.94 e⁻ = Table 3 5.942). Con `(n+1)` daría ~55 e⁻ (10× de más). σ_read DECRECE con t_exp y satura en el piso √25=5 e⁻ (up-the-ramp).
 - **Sky noise**: `σ_sky = √(t_exp·(σ²_zodi + σ²_thermal))` — combines zodi + thermal (eq 10). Dark current ignored.
 - **NEA**: per (band, tier), median of best/worst FOV (Table 3).
 - Table 3 reference values (DEEP: F → NEA=16.335, σ_sky=17.723, ZP=33.299, σ_read=5.942) match `ROMAN_DEEP/WIDE` in `kilonova_syntetic.py` exactly.
