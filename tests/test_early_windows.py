@@ -12,8 +12,9 @@ def bright_model(bands, magnitude=22.0):
 
 
 def test_build_window_fixed_epoch_grid(tier_constants):
-    window = early_windows.build_window_from_model("123", bright_model(tier_constants["bands"]),
-                                                   tier_constants, redshift=0.2, gentype=10)
+    window = early_windows.build_window_from_model(
+        "123", bright_model(tier_constants["bands"]), tier_constants, redshift=0.2, gentype=10
+    )
     assert window is not None
     assert window["epoch"].nunique() == early_windows.NUMBER_OF_EPOCHS
     # fixed grid: every epoch carries one row per tier band, observed or not
@@ -25,14 +26,20 @@ def test_build_window_fixed_epoch_grid(tier_constants):
 
 
 def test_build_window_is_reproducible(tier_constants):
-    first = early_windows.build_window_from_model("123", bright_model(tier_constants["bands"]),
-                                                  tier_constants, redshift=0.2, gentype=10)
-    second = early_windows.build_window_from_model("123", bright_model(tier_constants["bands"]),
-                                                   tier_constants, redshift=0.2, gentype=10)
+    first = early_windows.build_window_from_model(
+        "123", bright_model(tier_constants["bands"]), tier_constants, redshift=0.2, gentype=10
+    )
+    second = early_windows.build_window_from_model(
+        "123", bright_model(tier_constants["bands"]), tier_constants, redshift=0.2, gentype=10
+    )
     assert first.equals(second)
     different_seed = early_windows.build_window_from_model(
-        "123", bright_model(tier_constants["bands"]), tier_constants,
-        redshift=0.2, gentype=10, noise_seed=99,
+        "123",
+        bright_model(tier_constants["bands"]),
+        tier_constants,
+        redshift=0.2,
+        gentype=10,
+        noise_seed=99,
     )
     assert not first["mag_observed"].equals(different_seed["mag_observed"])
 

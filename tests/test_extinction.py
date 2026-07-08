@@ -1,8 +1,9 @@
 import numpy as np
 import pytest
 
-extinction = pytest.importorskip("kilonova.simulation.extinction",
-                                 reason="needs pyphot/ray/dustmaps (sim extras)")
+extinction = pytest.importorskip(
+    "kilonova.simulation.extinction", reason="needs pyphot/ray/dustmaps (sim extras)"
+)
 
 
 def test_build_redshift_grid_endpoints():
