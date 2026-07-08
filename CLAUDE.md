@@ -25,6 +25,10 @@ this repository owns data simulation and datasets.
 - `notebooks/` — import from the package, never `sys.path` hacks.
 - Big data: DVC (`dvc pull`; remote on `/Volumes/Elements/dvc-kilonova`). OpenUniverse source
   hdf5s live on `/Volumes/T7/openuniverse2025`.
+- Compute split: the full `kn-run-openuniverse` (deep+wide, 33 fields) runs on the training
+  laptop (too expensive here); its `early_windows_{deep,wide}.parquet` come back via DVC.
+  `kn-cache-lanl` is historical — `lanl_spectra.parquet` was built once from the OLD raw grid
+  (`kn_sim_cube_v1`); the cached parquet is the working source of truth.
 
 ## Noise recipe (provenance)
 

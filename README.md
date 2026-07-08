@@ -58,6 +58,12 @@ Every command accepts `--help`, `-v` for debug logging, and `--limit-ou N` (wher
 for smoke tests. The `extinguish` and `early_windows` steps are also wired as DVC stages:
 `dvc repro` re-runs whatever is out of date (parameters in `params.yaml`).
 
+The full `kn-run-openuniverse` run is computationally expensive and is executed on the
+training machine; the resulting `early_windows_{deep,wide}.parquet` travel back through DVC
+(`dvc add` + `dvc push` there, `dvc pull` here). `kn-cache-lanl` is historical: it built
+`lanl_spectra.parquet` from the old raw grid (`kn_sim_cube_v1`) and only matters if the cache
+ever needs rebuilding.
+
 ## Development
 
 ```bash
