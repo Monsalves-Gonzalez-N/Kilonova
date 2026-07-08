@@ -43,8 +43,8 @@ data/openuniverse/*.parquet
 data/openuniverse/*.fits
 data/openuniverse/*.fits.gz
 
-# Generated figure PDFs and local caches
+# Generated figure PDFs, reference papers and local caches
 data/openuniverse/*.pdf
 data/dust_generation/*.pdf
-model/openuniverse_cache/
-model/*.pdf
+data/openuniverse_cache/
+docs/papers/
