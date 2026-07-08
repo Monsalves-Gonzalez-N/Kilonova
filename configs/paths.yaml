@@ -6,8 +6,8 @@ openuniverse_source: /Volumes/T7/openuniverse2025
 openuniverse_hdf5: data/openuniverse/snana_10307_full.hdf5
 openuniverse_catalog: data/openuniverse/snana_10307.parquet
 lanl_spectra: data/dust_generation/lanl_spectra.parquet
-lanl_grid_dir: data/dust_generation/kn_sim_cube_v1
-lanl_catalog: data/dust_generation/lanl_catalog.parquet
+lanl_grid_dir: /Volumes/Elements/kn_sim_cube_v1  # raw LANL grid lives on the external drive
+lanl_catalog: data/lanl_catalog.parquet
 kcor: data/kcor/kcor_ROMAN.fits
 hourglass_objects: data/dust_generation/hourglass_objects.parquet
 output_dir: data/openuniverse
