@@ -25,7 +25,7 @@ import numpy as np
 
 SNR_DETECTION = 5.0
 ZP_JITTER_SIGMA = 0.15  # mag, FOV scatter of the zeropoint (Rose et al. 2025, eq. 8)
-FIELD_SEED = 0          # reproducibility of the per-tier field choice
+FIELD_SEED = 0  # reproducibility of the per-tier field choice
 
 # --- Roman High Latitude Time Domain Survey (HLTDS): tiers Wide / Deep ---
 # Total exposure time per EPOCH (s) from the HLTDS design (coadd/MA-table per epoch).
@@ -46,24 +46,24 @@ ALL_BANDS_BY_WAVELENGTH = ["R062", "Z087", "Y106", "J129", "H158", "F184", "K213
 # getSkyLevel computes the zodiacal light from the field's ecliptic latitude.
 HLTDS_FIELD_CENTER = {
     "ELAIS-N1": (242.50417, 54.51000),
-    "EDFS_a":   (58.90000, -49.32000),
-    "EDFS_b":   (63.60000, -47.60000),
+    "EDFS_a": (58.90000, -49.32000),
+    "EDFS_b": (63.60000, -47.60000),
 }
 HLTDS_FIELDS_BY_TIER = {"deep": ["ELAIS-N1", "EDFS_a"], "wide": ["ELAIS-N1", "EDFS_b"]}
 
 # Exposure-dependent read noise (Rose et al. 2025, eq. 9): denominator n(n+1), NOT (n+1).
 # Decreases with t_exp and saturates at the floor sqrt(25)=5 e- (up-the-ramp). Replaces the
 # static roman.read_noise, which does not know the revised HLTDS exposure times.
-READ_FRAME_TIME = 3.04             # s between non-destructive reads
-READ_FLOOR_VARIANCE = 25.0         # e-^2 (floor sqrt = 5 e-)
-READ_RAMP_VARIANCE = 12 * 16 ** 2  # = 3072 e-^2
+READ_FRAME_TIME = 3.04  # s between non-destructive reads
+READ_FLOOR_VARIANCE = 25.0  # e-^2 (floor sqrt = 5 e-)
+READ_RAMP_VARIANCE = 12 * 16**2  # = 3072 e-^2
 
 # PSF NEA per band (pix), Hourglass (Rose et al. 2025) Table 3: median best/worst NEA across the
 # FOV from the Roman WFI technical website PSF. Tabulated instead of roman.getPSF because the
 # analytic Cycle-9 PSF of galsim overestimates the NEA ~15-28% in the blue bands (R/Z/Y) vs that
 # PSF (H/F agree). Independent of tier and exposure.
-PSF_NEA_PIX = {"R062": 5.575, "Z087": 6.695, "Y106": 7.895,
-               "J129": 9.210, "H158": 11.140, "F184": 16.335}
+PSF_NEA_PIX = {"R062": 5.575, "Z087": 6.695, "Y106": 7.895, "J129": 9.210, "H158": 11.140, "F184": 16.335}
+
 
 @lru_cache(maxsize=1)
 def _galsim_roman():
@@ -90,8 +90,7 @@ def collecting_area_cm2():
 @lru_cache(maxsize=1)
 def roman_zeropoint():
     bandpasses = roman_bandpasses()
-    return {band: bandpasses[band].zeropoint
-            for band in ALL_BANDS_BY_WAVELENGTH if band in bandpasses}
+    return {band: bandpasses[band].zeropoint for band in ALL_BANDS_BY_WAVELENGTH if band in bandpasses}
 
 
 def read_noise_electrons(exposure_time):
@@ -129,15 +128,27 @@ def build_tier_constants(tier, field_seed=FIELD_SEED):
     for band in bands:
         exposure = exposure_time[band]
         # getSkyLevel returns e-/arcsec^2 -> e-/pixel via pixel_scale^2 before summing per-pixel terms.
-        sky_level = roman.getSkyLevel(bandpasses[band], world_pos=field_world_position,
-                                      exptime=exposure) * roman.pixel_scale ** 2
+        sky_level = (
+            roman.getSkyLevel(bandpasses[band], world_pos=field_world_position, exptime=exposure)
+            * roman.pixel_scale**2
+        )
         read_noise = read_noise_electrons(exposure)
-        background_per_pixel = (sky_level + roman.thermal_backgrounds[band] * exposure
-                                + roman.dark_current * exposure + read_noise ** 2)
+        background_per_pixel = (
+            sky_level
+            + roman.thermal_backgrounds[band] * exposure
+            + roman.dark_current * exposure
+            + read_noise**2
+        )
         noise_floor_variance[band] = PSF_NEA_PIX[band] * background_per_pixel
-    return {"tier": tier, "exposure_time": exposure_time, "anchor_band": anchor_band,
-            "bands": bands, "zeropoint": zeropoint, "noise_floor_variance": noise_floor_variance,
-            "field_name": field_name}
+    return {
+        "tier": tier,
+        "exposure_time": exposure_time,
+        "anchor_band": anchor_band,
+        "bands": bands,
+        "zeropoint": zeropoint,
+        "noise_floor_variance": noise_floor_variance,
+        "field_name": field_name,
+    }
 
 
 def source_flux_electrons(mag_true, exposure, zeropoint):
@@ -202,6 +213,7 @@ def first_epochs_since_detection(photometry, number, time_column="mjd"):
     detected_times = photometry.loc[photometry["detected"], time_column]
     if len(detected_times) == 0:
         return photometry.iloc[0:0]
-    epoch_times = epochs_from_first_detection(photometry[time_column].to_numpy(),
-                                              detected_times.min(), number)
+    epoch_times = epochs_from_first_detection(
+        photometry[time_column].to_numpy(), detected_times.min(), number
+    )
     return photometry[photometry[time_column].isin(epoch_times)].sort_values([time_column, "band"])

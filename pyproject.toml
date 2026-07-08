@@ -25,6 +25,12 @@ dependencies = [
     "dustmaps",
 ]
 
+[project.scripts]
+kn-cache-lanl = "kilonova.cli.cache_lanl:main"
+kn-extinguish = "kilonova.cli.extinguish:main"
+kn-early-windows = "kilonova.cli.early_windows:main"
+kn-run-openuniverse = "kilonova.cli.run_all_openuniverse:main"
+
 [project.optional-dependencies]
 sim = [
     "pyphot",

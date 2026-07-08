@@ -1,60 +1,43 @@
-"""Run generate_early_windows for all HDF5/parquet pairs and produce ONE combined parquet per tier.
+"""kn-run-openuniverse: early windows for ALL OpenUniverse fields, one combined parquet per tier.
 
-For every snana_XXXXX.hdf5 (with matching snana_XXXXX.parquet) in SOURCE_DIR, extracts the
-early-window light curves using the same noise recipe and cadence as generate_early_windows.py,
-then concatenates all 33 fields into two output files:
+For every snana_XXXXX.hdf5 (with matching snana_XXXXX.parquet) in the source directory,
+extracts the early-window light curves with the same noise recipe and cadence as
+kn-early-windows, then concatenates all fields into:
 
     {output_dir}/early_windows_deep.parquet
     {output_dir}/early_windows_wide.parquet
 
 object_id is prefixed with the snana_id (e.g. "snana_10307_12345678") to stay unique across
-fields. A snana_id column is added for traceability.
-
-Tiers are processed sequentially to bound peak memory (one tier in RAM at a time).
-
-Usage:
-    python run_all_openuniverse.py [source_dir] [output_dir]
-
-Defaults:
-    source_dir = /Volumes/T7/openuniverse2025
-    output_dir = /Users/bhianca/Kilonova/data/openuniverse
+fields. A snana_id column is added for traceability. Tiers are processed sequentially to
+bound peak memory (one tier in RAM at a time).
 """
 
+import argparse
 import glob
+import logging
 import os
-import sys
 import time
 import traceback
+from pathlib import Path
 
 import h5py
-import numpy as np
 import pandas as pd
 
-from kilonova.simulation import early_windows as gew
+from kilonova.config import load_paths, require
+from kilonova.log import setup_logging
+from kilonova.simulation import early_windows
 
-SOURCE_DIR = "/Volumes/T7/openuniverse2025"
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def collect_object_records(catalog_path):
-    catalog = pd.read_parquet(catalog_path)
-    transients = catalog[catalog["gentype"] != 99]
-    records = [
-        (int(row.id), float(row.z_CMB), int(row.gentype))
-        for row in transients.itertuples()
-    ]
-    if gew.OU_LIMIT is not None:
-        records = records[:gew.OU_LIMIT]
-    return records
+logger = logging.getLogger(__name__)
 
 
-def process_tier(tier, hdf5_paths, source_dir):
+def process_tier(tier, hdf5_paths, limit_ou=None):
     """One pass over all HDF5 files for a single tier -> list of window DataFrames."""
-    constants = gew.build_tier_constants(tier)
-    print(
-        f"\n[{tier}] bands={constants['bands']}  noise_floor_variance: "
-        + ", ".join(f"{band}={variance:.0f}" for band, variance in constants["noise_floor_variance"].items()),
-        flush=True,
+    constants = early_windows.build_tier_constants(tier)
+    logger.info(
+        "[%s] bands=%s  noise_floor_variance: %s",
+        tier,
+        constants["bands"],
+        ", ".join(f"{band}={variance:.0f}" for band, variance in constants["noise_floor_variance"].items()),
     )
 
     all_windows = []
@@ -65,18 +48,18 @@ def process_tier(tier, hdf5_paths, source_dir):
         snana_id = os.path.basename(hdf5_path).replace(".hdf5", "")
         catalog_path = hdf5_path.replace(".hdf5", ".parquet")
         if not os.path.exists(catalog_path):
-            print(f"  [{snana_id}] no catalog parquet, skipping", flush=True)
+            logger.warning("[%s] no catalog parquet, skipping", snana_id)
             continue
 
-        object_records = collect_object_records(catalog_path)
+        object_records = early_windows.collect_object_records(catalog_path, limit=limit_ou)
         file_windows = []
         file_start = time.time()
 
         with h5py.File(hdf5_path, "r") as hdf5:
-            for counter, (object_id, redshift, gentype) in enumerate(object_records):
+            for object_id, redshift, gentype in object_records:
                 if str(object_id) not in hdf5:
                     continue
-                window = gew.build_early_window(
+                window = early_windows.build_early_window(
                     object_id, hdf5[str(object_id)], constants, redshift, gentype
                 )
                 if window is None:
@@ -89,58 +72,77 @@ def process_tier(tier, hdf5_paths, source_dir):
         n_detected = len(file_windows)
         total_detected += n_detected
         all_windows.extend(file_windows)
-        print(
-            f"  [{tier}] [{file_index}/{len(hdf5_paths)}] {snana_id}: "
-            f"detected={n_detected}/{len(object_records)}  "
-            f"({time.time() - file_start:.0f}s)",
-            flush=True,
+        logger.info(
+            "[%s] [%d/%d] %s: detected=%d/%d (%.0fs)",
+            tier,
+            file_index,
+            len(hdf5_paths),
+            snana_id,
+            n_detected,
+            len(object_records),
+            time.time() - file_start,
         )
 
-    print(
-        f"[{tier}] all files done: total_detected={total_detected}  "
-        f"elapsed={time.time() - tier_start:.0f}s",
-        flush=True,
+    logger.info(
+        "[%s] all files done: total_detected=%d elapsed=%.0fs", tier, total_detected, time.time() - tier_start
     )
     return all_windows
 
 
-def main():
-    source_dir = sys.argv[1] if len(sys.argv) > 1 else SOURCE_DIR
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else OUTPUT_DIR
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--source-dir", type=Path, help="directory with the snana_*.hdf5 + snana_*.parquet pairs"
+    )
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--limit-ou",
+        type=int,
+        default=None,
+        help="process only the first N transients per field (smoke tests)",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true")
+    arguments = parser.parse_args(argv)
 
-    hdf5_paths = sorted(glob.glob(os.path.join(source_dir, "snana_*.hdf5")))
+    setup_logging(arguments.verbose)
+    paths = load_paths()
+    source_dir = require(arguments.source_dir or paths.openuniverse_source, "openuniverse_source")
+    output_dir = arguments.output_dir or paths.output_dir
+    if output_dir is None:
+        raise SystemExit("output_dir is not configured (configs/paths.yaml, KN_OUTPUT_DIR or --output-dir)")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    hdf5_paths = sorted(glob.glob(str(source_dir / "snana_*.hdf5")))
     if not hdf5_paths:
-        print(f"No snana_*.hdf5 files found in {source_dir}", flush=True)
-        sys.exit(1)
+        raise SystemExit(f"No snana_*.hdf5 files found in {source_dir}")
 
-    os.makedirs(output_dir, exist_ok=True)
-
-    print(f"source_dir : {source_dir}", flush=True)
-    print(f"output_dir : {output_dir}", flush=True)
-    print(f"HDF5 files : {len(hdf5_paths)}", flush=True)
+    logger.info("source_dir : %s", source_dir)
+    logger.info("output_dir : %s", output_dir)
+    logger.info("HDF5 files : %d", len(hdf5_paths))
 
     total_start = time.time()
-
     for tier in ("deep", "wide"):
-        output_path = os.path.join(output_dir, f"early_windows_{tier}.parquet")
-        if os.path.exists(output_path):
-            print(f"\n[{tier}] output already exists, skipping: {output_path}", flush=True)
+        output_path = output_dir / f"early_windows_{tier}.parquet"
+        if output_path.exists():
+            logger.info("[%s] output already exists, skipping: %s", tier, output_path)
             continue
 
         try:
-            windows = process_tier(tier, hdf5_paths, source_dir)
+            windows = process_tier(tier, hdf5_paths, limit_ou=arguments.limit_ou)
             if not windows:
-                print(f"[{tier}] WARNING: no windows produced, skipping write", flush=True)
+                logger.warning("[%s] no windows produced, skipping write", tier)
                 continue
             combined = pd.concat(windows, ignore_index=True)
             combined.to_parquet(output_path, index=False)
-            print(f"[{tier}] -> {output_path}  rows={len(combined)}", flush=True)
+            logger.info("[%s] -> %s rows=%d", tier, output_path, len(combined))
             del combined, windows
         except Exception:
-            print(f"[{tier}] ERROR:", flush=True)
-            traceback.print_exc()
+            logger.error("[%s] ERROR:\n%s", tier, traceback.format_exc())
 
-    print(f"\nDONE  total={time.time() - total_start:.0f}s", flush=True)
+    logger.info("DONE total=%.0fs", time.time() - total_start)
 
 
 if __name__ == "__main__":

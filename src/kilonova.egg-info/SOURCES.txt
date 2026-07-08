@@ -1,11 +1,17 @@
 pyproject.toml
 src/kilonova/__init__.py
+src/kilonova/config.py
+src/kilonova/log.py
 src/kilonova.egg-info/PKG-INFO
 src/kilonova.egg-info/SOURCES.txt
 src/kilonova.egg-info/dependency_links.txt
+src/kilonova.egg-info/entry_points.txt
 src/kilonova.egg-info/requires.txt
 src/kilonova.egg-info/top_level.txt
 src/kilonova/cli/__init__.py
+src/kilonova/cli/cache_lanl.py
+src/kilonova/cli/early_windows.py
+src/kilonova/cli/extinguish.py
 src/kilonova/cli/run_all_openuniverse.py
 src/kilonova/datasets/__init__.py
 src/kilonova/datasets/openuniverse.py

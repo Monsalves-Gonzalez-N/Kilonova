@@ -1,6 +1,7 @@
-import os
+import logging
 import time
 from collections import defaultdict
+from functools import lru_cache
 
 import h5py
 import numpy as np
@@ -10,50 +11,53 @@ import pyarrow.parquet as pq
 # Receta de error fotometrico Roman (fuente unica de verdad). Constantes y primitivas se importan de
 # aqui en vez de redefinirlas, para que pipeline y notebooks no se desincronicen.
 from kilonova.photometry.roman_noise import (
-    SNR_DETECTION, ZP_JITTER_SIGMA, FIELD_SEED,
-    EXPOSURE_TIME_BY_TIER, BASE_CADENCE_DAYS, TIER_ANCHOR_BAND, ALL_BANDS_BY_WAVELENGTH,
-    HLTDS_FIELD_CENTER, HLTDS_FIELDS_BY_TIER, PSF_NEA_PIX,
+    BASE_CADENCE_DAYS,
+    SNR_DETECTION,
+    ZP_JITTER_SIGMA,
+    build_tier_constants,
+    cadence_schedule,
     collecting_area_cm2,
-    read_noise_electrons, field_center_for_tier, build_tier_constants,
-    source_flux_electrons, flux_error_electrons, limiting_magnitude_5sigma,
-    epochs_from_first_detection, cadence_schedule,
+    epochs_from_first_detection,
+    flux_error_electrons,
+    limiting_magnitude_5sigma,
+    source_flux_electrons,
 )
+
 # Receta de fotometria sintetica de kilonovas (SED LANL -> mag AB Roman), validada en el dataloader.
 from kilonova.photometry.spectra import ALL_ROMAN_BANDS, magnitudes_for_bands
 
-# Todo el pipeline vive en esta carpeta: hdf5 de entrada (OpenUniverse), catalogo y HDF5 de salida.
-DATA_DIR = os.path.dirname(os.path.abspath(__file__))
-# Un hdf5 por tier (se corren por separado). Por defecto ambos apuntan al mismo snana_10307_full.hdf5.
-HDF5_PATH_BY_TIER = {
-    "deep": os.path.join(DATA_DIR, "snana_10307_full.hdf5"),
-    "wide": os.path.join(DATA_DIR, "snana_10307_full.hdf5"),
-}
-CATALOG_PATH = os.path.join(DATA_DIR, "snana_10307.parquet")
-OUTPUT_DIR = DATA_DIR
+logger = logging.getLogger(__name__)
 
 # Grid de kilonovas LANL (espectros rest-frame ya cacheados; un row group por archivo .dat).
-LANL_SPECTRA_PATH = "/Users/bhianca/Kilonova/data/dust_generation/lanl_spectra.parquet"
+# El path del parquet viene de configs/paths.yaml via kilonova.config (nunca hardcodeado aqui).
 LANL_METADATA_COLUMNS = ["simulation_id", "time_index", "time_days", "angle_index"]
 N_ANGLE_BINS = 54
 
 # Inyeccion de kilonovas: una KN por transiente con z < KN_REDSHIFT_MAX, a ese mismo z.
 KN_REDSHIFT_MAX = 0.5
-KN_REALIZATION_SEED = 0       # reproducibilidad del sorteo simulacion/angulo/offset
-N_KN_VISITS = 8               # visitas sinteticas (margen para hallar 1a deteccion + 4 epocas)
+KN_REALIZATION_SEED = 0  # reproducibilidad del sorteo simulacion/angulo/offset
+N_KN_VISITS = 8  # visitas sinteticas (margen para hallar 1a deteccion + 4 epocas)
 EXPLOSION_OFFSET_MAX_DAYS = 5.0  # t0 ~ U[0, max]: dias observador entre el merger y la 1a visita
 KN_GENTYPE = 50
 # Offset para la semilla de ruido de las KN: las KN ya no usan object_id (ahora string) para sembrar,
 # asi que el ruido se siembra con KN_SEED_OFFSET + id_fuente, disjunto de los ids OU (~8e7).
 KN_SEED_OFFSET = 2_000_000_000
 
-# Limites opcionales para smoke-tests (0 = sin limite). No afectan la corrida completa.
-OU_LIMIT = int(os.environ.get("EARLY_WINDOWS_OU_LIMIT", "0")) or None
-KN_LIMIT = int(os.environ.get("EARLY_WINDOWS_KN_LIMIT", "0")) or None
-
 NUMBER_OF_EPOCHS = 4
 
-GENTYPE_LABEL = {10: "SN Ia", 12: "SN Iax", 21: "SN Ib", 26: "SN Ic", 32: "SN II",
-                 40: "SLSN-I", 42: "TDE", 50: "KN", 57: "PISN-H", 58: "PISN-He", 99: "FIXMAG"}
+GENTYPE_LABEL = {
+    10: "SN Ia",
+    12: "SN Iax",
+    21: "SN Ib",
+    26: "SN Ic",
+    32: "SN II",
+    40: "SLSN-I",
+    42: "TDE",
+    50: "KN",
+    57: "PISN-H",
+    58: "PISN-He",
+    99: "FIXMAG",
+}
 
 
 def visit_schedule(window_start, window_end, constants):
@@ -80,8 +84,9 @@ def model_from_hdf5_group(group, constants):
     return model
 
 
-def build_window_from_model(object_id, model, constants, redshift, gentype,
-                            base_epochs=None, noise_seed=None):
+def build_window_from_model(
+    object_id, model, constants, redshift, gentype, base_epochs=None, noise_seed=None
+):
     """Grilla fija NUMBER_OF_EPOCHS épocas × bandas del tier desde la primera detección S/N>=5.
     Magnitud observada = realización ruidosa en espacio de FLUJO -> mag. Filas no observadas por la
     cadencia llevan observed=False y mag_observed/mag_err = NaN (pero conservan mag_true del modelo).
@@ -108,8 +113,9 @@ def build_window_from_model(object_id, model, constants, redshift, gentype,
 
     # Dos streams independientes por objeto (deterministas): jitter del zeropoint (posición FOV) y la
     # realización de ruido del flujo. spawn evita correlación entre ambos.
-    jitter_rng, noise_rng = (np.random.default_rng(seed)
-                             for seed in np.random.SeedSequence(int(noise_seed)).spawn(2))
+    jitter_rng, noise_rng = (
+        np.random.default_rng(seed) for seed in np.random.SeedSequence(int(noise_seed)).spawn(2)
+    )
 
     # Zeropoint con jitter FOV por (banda, visita): una realización por observación, fija por objeto.
     # Orden de bandas determinista para que las extracciones del rng sean reproducibles.
@@ -121,7 +127,7 @@ def build_window_from_model(object_id, model, constants, redshift, gentype,
         observed_mjds = schedule.get(band, np.empty(0))
         epochs = observed_mjds[(observed_mjds >= band_mjd.min()) & (observed_mjds <= band_mjd.max())]
         jitters = jitter_rng.normal(0.0, ZP_JITTER_SIGMA, size=len(epochs))
-        for epoch_mjd, jitter in zip(epochs, jitters):
+        for epoch_mjd, jitter in zip(epochs, jitters, strict=True):
             jittered_zeropoint[(band, round(float(epoch_mjd), 6))] = base_zeropoint_by_band[band] + jitter
 
     def observation_quantities(band, epoch_mjd, mag_true):
@@ -142,7 +148,7 @@ def build_window_from_model(object_id, model, constants, redshift, gentype,
         if len(epochs) == 0:
             continue
         mag_true_epochs = nearest_model_magnitude(band_mjd, band_mag, epochs)
-        for epoch_mjd, mag_true in zip(epochs, mag_true_epochs):
+        for epoch_mjd, mag_true in zip(epochs, mag_true_epochs, strict=True):
             _, _, flux_true, flux_error = observation_quantities(band, epoch_mjd, mag_true)
             if flux_true / flux_error >= SNR_DETECTION:
                 detection_mjds.append(epoch_mjd)
@@ -165,14 +171,23 @@ def build_window_from_model(object_id, model, constants, redshift, gentype,
             if band in model:
                 band_mjd, band_mag = model[band]
                 if band_mjd.min() <= epoch_mjd <= band_mjd.max():
-                    mag_true = float(nearest_model_magnitude(band_mjd, band_mag,
-                                                             np.array([epoch_mjd]))[0])
-            row = {"object_id": object_id, "gentype": int(gentype),
-                   "label": GENTYPE_LABEL.get(gentype, "UNKNOWN"), "z_CMB": redshift,
-                   "epoch": epoch_index, "days_since_detection": days_since_detection, "band": band,
-                   "observed": bool(observed and np.isfinite(mag_true)),
-                   "mag_true": mag_true, "mag_observed": np.nan, "mag_err": np.nan,
-                   "snr": np.nan, "detected": False, "mag_limit_5sigma": np.nan}
+                    mag_true = float(nearest_model_magnitude(band_mjd, band_mag, np.array([epoch_mjd]))[0])
+            row = {
+                "object_id": object_id,
+                "gentype": int(gentype),
+                "label": GENTYPE_LABEL.get(gentype, "UNKNOWN"),
+                "z_CMB": redshift,
+                "epoch": epoch_index,
+                "days_since_detection": days_since_detection,
+                "band": band,
+                "observed": bool(observed and np.isfinite(mag_true)),
+                "mag_true": mag_true,
+                "mag_observed": np.nan,
+                "mag_err": np.nan,
+                "snr": np.nan,
+                "detected": False,
+                "mag_limit_5sigma": np.nan,
+            }
             if row["observed"]:
                 zeropoint, exposure, flux_true, flux_error = observation_quantities(band, epoch_mjd, mag_true)
                 snr = flux_true / flux_error
@@ -182,8 +197,9 @@ def build_window_from_model(object_id, model, constants, redshift, gentype,
                 row["detected"] = bool(snr >= SNR_DETECTION)
                 row["mag_limit_5sigma"] = limiting_magnitude_5sigma(flux_error, exposure, zeropoint)
                 if flux_observed > 0:
-                    row["mag_observed"] = zeropoint - 2.5 * np.log10(flux_observed / exposure
-                                                                     / collecting_area_cm2())
+                    row["mag_observed"] = zeropoint - 2.5 * np.log10(
+                        flux_observed / exposure / collecting_area_cm2()
+                    )
                 else:
                     row["mag_observed"] = row["mag_limit_5sigma"]
             rows.append(row)
@@ -201,36 +217,32 @@ def build_early_window(object_id, group, constants, redshift, gentype):
 # Kilonovas LANL: misma receta de ruido, mag_true desde la SED redshifteada.
 # ---------------------------------------------------------------------------
 
-_LANL_PARQUET_FILE = None
+
+@lru_cache(maxsize=2)
+def _lanl_parquet_file(lanl_spectra_path):
+    return pq.ParquetFile(lanl_spectra_path)
 
 
-def _lanl_parquet_file():
-    global _LANL_PARQUET_FILE
-    if _LANL_PARQUET_FILE is None:
-        _LANL_PARQUET_FILE = pq.ParquetFile(LANL_SPECTRA_PATH)
-    return _LANL_PARQUET_FILE
-
-
-def load_lanl_wavelength_grid():
+def load_lanl_wavelength_grid(lanl_spectra_path):
     """Grilla de longitud de onda rest-frame (Å), guardada en la metadata del schema parquet."""
-    metadata = _lanl_parquet_file().schema_arrow.metadata or {}
+    metadata = _lanl_parquet_file(str(lanl_spectra_path)).schema_arrow.metadata or {}
     wavelength_bytes = metadata.get(b"wavelength_rest_aa")
     if wavelength_bytes is None:
-        raise RuntimeError(f"{LANL_SPECTRA_PATH}: falta la metadata wavelength_rest_aa")
+        raise RuntimeError(f"{lanl_spectra_path}: falta la metadata wavelength_rest_aa")
     return np.frombuffer(wavelength_bytes, dtype=np.float32).astype(float)
 
 
-def load_lanl_catalog_metadata():
-    catalog = _lanl_parquet_file().read(columns=LANL_METADATA_COLUMNS).to_pandas()
+def load_lanl_catalog_metadata(lanl_spectra_path):
+    catalog = _lanl_parquet_file(str(lanl_spectra_path)).read(columns=LANL_METADATA_COLUMNS).to_pandas()
     catalog.index.name = "spectrum_id"
     return catalog
 
 
-def load_simulation_spectra(simulation_id):
+def load_simulation_spectra(simulation_id, lanl_spectra_path):
     """{(angle_index, time_index): flux_rest} de una simulacion LANL, leyendo su(s) row group(s) una
     sola vez. Pensado para iterar todos los espectros de una simulacion sin reescanear el parquet."""
     simulation_id = int(simulation_id)
-    parquet_file = _lanl_parquet_file()
+    parquet_file = _lanl_parquet_file(str(lanl_spectra_path))
     field_index = parquet_file.schema_arrow.get_field_index("simulation_id")
     spectra = {}
     for group_index in range(parquet_file.num_row_groups):
@@ -252,7 +264,7 @@ def load_simulation_spectra(simulation_id):
             key = (int(angle_array[local_index]), int(time_array[local_index]))
             spectra[key] = np.asarray(flux_column[local_index].as_py(), dtype=float)
     if not spectra:
-        raise KeyError(f"simulation_id={simulation_id} no encontrada en {LANL_SPECTRA_PATH}")
+        raise KeyError(f"simulation_id={simulation_id} no encontrada en {lanl_spectra_path}")
     return spectra
 
 
@@ -265,7 +277,8 @@ def build_simulation_time_grids(lanl_catalog):
     for simulation_id, group in unique_times.groupby("simulation_id"):
         ordered = group.sort_values("time_days")
         simulation_time_grids[int(simulation_id)] = (
-            ordered["time_index"].to_numpy(), ordered["time_days"].to_numpy(),
+            ordered["time_index"].to_numpy(),
+            ordered["time_days"].to_numpy(),
         )
     return simulation_time_grids
 
@@ -296,7 +309,9 @@ def sample_kn_realizations(transients, simulation_pool, rng, redshift_max=KN_RED
     return realizations
 
 
-def build_kn_models(realizations, simulation_time_grids, wavelength_rest_aa, bands=ALL_ROMAN_BANDS):
+def build_kn_models(
+    realizations, simulation_time_grids, wavelength_rest_aa, lanl_spectra_path, bands=ALL_ROMAN_BANDS
+):
     """Modelo verdadero de cada KN (mag AB por banda en cada visita base) en UNA pasada, agrupando por
     simulacion para leer cada row group LANL una sola vez. base_epochs = offset + 5*arange(N_KN_VISITS);
     rest_phase = base_epoch/(1+z). Tier-independiente: depende solo de (sim, angulo, offset, z), por lo
@@ -309,7 +324,7 @@ def build_kn_models(realizations, simulation_time_grids, wavelength_rest_aa, ban
     kn_models = {}
     start = time.time()
     for counter, (simulation_id, kn_object_ids) in enumerate(by_simulation.items()):
-        simulation_spectra = load_simulation_spectra(simulation_id)
+        simulation_spectra = load_simulation_spectra(simulation_id, lanl_spectra_path)
         for kn_object_id in kn_object_ids:
             realization = realizations[kn_object_id]
             redshift = realization["redshift"]
@@ -336,8 +351,13 @@ def build_kn_models(realizations, simulation_time_grids, wavelength_rest_aa, ban
             kn_models[kn_object_id] = (model, base_epochs, realization)
 
         if (counter + 1) % 50 == 0:
-            print(f"[kn-models] {counter + 1}/{len(by_simulation)} simulations "
-                  f"({len(kn_models)} kilonovas, {time.time() - start:.0f}s)", flush=True)
+            logger.info(
+                "[kn-models] %d/%d simulations (%d kilonovas, %.0fs)",
+                counter + 1,
+                len(by_simulation),
+                len(kn_models),
+                time.time() - start,
+            )
     return kn_models
 
 
@@ -348,15 +368,22 @@ def kn_windows_for_tier(kn_models, constants):
     n_skipped = 0
     tier_bands = set(constants["bands"])
     start = time.time()
-    for counter, (kn_object_id, (model_6band, base_epochs, realization)) in enumerate(kn_models.items()):
+    for counter, (_kn_object_id, (model_6band, base_epochs, realization)) in enumerate(kn_models.items()):
         model_tier = {band: series for band, series in model_6band.items() if band in tier_bands}
         # object_id de la KN = simulation_id_angle_index_explosion_offset_days (toda la realizacion).
-        kn_id = (f"{realization['simulation_id']}_{realization['angle_index']}_"
-                 f"{realization['explosion_offset_days']:.4f}")
+        kn_id = (
+            f"{realization['simulation_id']}_{realization['angle_index']}_"
+            f"{realization['explosion_offset_days']:.4f}"
+        )
         noise_seed = KN_SEED_OFFSET + realization["source_object_id"]
         window = build_window_from_model(
-            kn_id, model_tier, constants, realization["redshift"], KN_GENTYPE,
-            base_epochs=base_epochs, noise_seed=noise_seed,
+            kn_id,
+            model_tier,
+            constants,
+            realization["redshift"],
+            KN_GENTYPE,
+            base_epochs=base_epochs,
+            noise_seed=noise_seed,
         )
         if window is None:
             n_skipped += 1
@@ -364,21 +391,42 @@ def kn_windows_for_tier(kn_models, constants):
         n_detected += 1
         windows.append(window)
         if (counter + 1) % 5000 == 0:
-            print(f"[{constants['tier']}] kilonovas {counter + 1}/{len(kn_models)} "
-                  f"detected={n_detected} skipped={n_skipped} ({time.time() - start:.0f}s)", flush=True)
+            logger.info(
+                "[%s] kilonovas %d/%d detected=%d skipped=%d (%.0fs)",
+                constants["tier"],
+                counter + 1,
+                len(kn_models),
+                n_detected,
+                n_skipped,
+                time.time() - start,
+            )
     return windows, n_detected, n_skipped
 
 
-def run_tier(tier, object_records):
+def collect_object_records(catalog_path, limit=None):
+    """(id, z_CMB, gentype) de los transientes del catalogo de un field (gentype 99 = FIXMAG, fuera)."""
+    catalog = pd.read_parquet(catalog_path)
+    transients = catalog[catalog["gentype"] != 99]
+    object_records = [(int(row.id), float(row.z_CMB), int(row.gentype)) for row in transients.itertuples()]
+    if limit is not None:
+        object_records = object_records[:limit]
+    return object_records
+
+
+def run_tier(tier, object_records, hdf5_path, output_path):
     constants = build_tier_constants(tier)
-    print(f"[{tier}] field={constants['field_name']}  noise_floor_variance: "
-          + ", ".join(f"{b}={v:.0f}" for b, v in constants["noise_floor_variance"].items()), flush=True)
+    logger.info(
+        "[%s] field=%s  noise_floor_variance: %s",
+        tier,
+        constants["field_name"],
+        ", ".join(f"{b}={v:.0f}" for b, v in constants["noise_floor_variance"].items()),
+    )
 
     windows = []
     n_ou_detected = 0
     n_ou_full = 0
     start = time.time()
-    with h5py.File(HDF5_PATH_BY_TIER[tier], "r") as hdf5:
+    with h5py.File(hdf5_path, "r") as hdf5:
         for counter, (object_id, redshift, gentype) in enumerate(object_records):
             if str(object_id) not in hdf5:
                 continue
@@ -390,36 +438,26 @@ def run_tier(tier, object_records):
                 n_ou_full += 1
             windows.append(window)
             if (counter + 1) % 10000 == 0:
-                print(f"[{tier}] openuniverse {counter + 1}/{len(object_records)} "
-                      f"detected={n_ou_detected} full{NUMBER_OF_EPOCHS}={n_ou_full} "
-                      f"({time.time() - start:.0f}s)", flush=True)
+                logger.info(
+                    "[%s] openuniverse %d/%d detected=%d full%d=%d (%.0fs)",
+                    tier,
+                    counter + 1,
+                    len(object_records),
+                    n_ou_detected,
+                    NUMBER_OF_EPOCHS,
+                    n_ou_full,
+                    time.time() - start,
+                )
 
     result = pd.concat(windows, ignore_index=True)
-    output_path = os.path.join(OUTPUT_DIR, f"early_windows_{tier}.parquet")
     result.to_parquet(output_path, index=False)
-    print(f"[{tier}] DONE openuniverse_detected={n_ou_detected} (full{NUMBER_OF_EPOCHS}={n_ou_full}) "
-          f"rows={len(result)} -> {output_path}", flush=True)
+    logger.info(
+        "[%s] DONE openuniverse_detected=%d (full%d=%d) rows=%d -> %s",
+        tier,
+        n_ou_detected,
+        NUMBER_OF_EPOCHS,
+        n_ou_full,
+        len(result),
+        output_path,
+    )
     return n_ou_detected
-
-
-def main():
-    catalog = pd.read_parquet(CATALOG_PATH)
-    transients = catalog[catalog["gentype"] != 99]
-    object_records = [(int(row.id), float(row.z_CMB), int(row.gentype))
-                      for row in transients.itertuples()]
-    if OU_LIMIT is not None:
-        object_records = object_records[:OU_LIMIT]
-    print(f"transients in catalog (gentype!=FIXMAG): {len(object_records)}", flush=True)
-
-    summary = {}
-    for tier in ("deep", "wide"):
-        summary[tier] = run_tier(tier, object_records)
-
-    print("\n=== SUMMARY ===")
-    print(f"input transients (contaminants only): {len(object_records)}")
-    for tier, n_ou_detected in summary.items():
-        print(f"{tier}: openuniverse with>=1 detection={n_ou_detected}")
-
-
-if __name__ == "__main__":
-    main()
