@@ -1,20 +1,10 @@
-name: kn_class
+name: kilonova
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - python=3.11
-  - numpy
-  - pandas
-  - scipy
-  - matplotlib
-  - astropy
-  - jupyter
-  - imbalanced-learn
+  # conda-forge-only binary dependency; everything pip-safe lives in pyproject.toml
+  - galsim
   - pip
   - pip:
-    - torch --index-url https://download.pytorch.org/whl/cu124
-    - torchvision --index-url https://download.pytorch.org/whl/cu124
-    - seaborn
-    - pyarrow
-    - speclite
+      - -e .[sim,dev]

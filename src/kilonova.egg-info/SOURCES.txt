@@ -1,0 +1,7 @@
+pyproject.toml
+src/kilonova/__init__.py
+src/kilonova.egg-info/PKG-INFO
+src/kilonova.egg-info/SOURCES.txt
+src/kilonova.egg-info/dependency_links.txt
+src/kilonova.egg-info/requires.txt
+src/kilonova.egg-info/top_level.txt
