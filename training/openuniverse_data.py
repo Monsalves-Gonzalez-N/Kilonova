@@ -26,9 +26,9 @@ Leakage control:
       here, so template-level leakage among CC cannot be blocked from these files. (Object-level
       split is the best available; flag this if CC template leakage matters.)
 
-Output contract is identical to hourglass_data.build_dataloaders: same collated batch dict,
-same GROUP_ORDER / regime-loader structure, so model.py and train_lightning.py are unchanged
-apart from the import and the build_dataloaders(...) call.
+Output contract: collated batch dict with the keys KilonovaTransformer.forward() consumes
+(see docs/token_definitions.md), plus GROUP_ORDER / regime-loader metadata for
+train_lightning.py.
 
 Usage:
     from openuniverse_data import build_dataloaders, GROUP_ORDER
