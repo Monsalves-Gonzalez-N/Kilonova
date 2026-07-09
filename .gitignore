@@ -49,6 +49,10 @@ data/dust_generation/*.pdf
 data/openuniverse_cache/
 docs/papers/
 
+# Training weights and Lightning logs — too heavy for git (track via DVC if needed)
+training/checkpoints/
+training/lightning_logs/
+
 # Tool caches
 .pytest_cache/
 .ruff_cache/
