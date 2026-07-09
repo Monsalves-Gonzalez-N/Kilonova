@@ -2,8 +2,8 @@
 
 Extracted verbatim from transformer_architecture.ipynb (model cells only — the EDA,
 synthetic-batch, and plotting cells are left in the notebook). Consumes the batch dict
-produced by hourglass_data.collate_token_windows; the extra scenario / cid / true_redshift
-keys are ignored by forward().
+produced by openuniverse_data.collate_token_windows; extra metadata keys are ignored by
+forward().
 """
 
 import math

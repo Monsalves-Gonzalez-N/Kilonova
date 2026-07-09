@@ -1,7 +1,6 @@
 # Definición de un token (OpenUniverse dataloader → `KilonovaTransformer`)
 
-Fuente: `openuniverse_data.py` (alimenta a `model.py` / `train_lightning.py`, mismo
-contrato de batch que el `hourglass_data.py` original).
+Fuente: `openuniverse_data.py` (alimenta a `model.py` / `train_lightning.py`).
 
 ## Qué es un "token"
 

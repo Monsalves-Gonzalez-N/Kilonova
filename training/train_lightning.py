@@ -1,12 +1,11 @@
-"""Train the kilonova transformer with PyTorch Lightning on the real Hourglass survey data.
+"""Train the kilonova transformer with PyTorch Lightning on the OpenUniverse early windows.
 
 Run locally on GPU:
-    python train_lightning.py --data-dir data/dust_generation --epochs 30
+    python train_lightning.py --data-dir data/openuniverse --epochs 150
 
-Lightning port of train.py: same model, loss (inverse-frequency class weights), optimizer
-(AdamW) and metrics (loss + accuracy). Methodological binary test: the model separates the
-two well-sampled classes {Ia, CCSN}; the Ia-peculiars and rare exotics are dropped, and the
-KN injected-signal scenario comes later.
+Binary classification {KN, other}: LANL kilonovas (kilonova_windows_*.hdf5) vs Roman
+contaminants (early_windows_*.parquet). Inverse-frequency class weights, AdamW,
+loss + accuracy metrics; model selection by val_acc_noz.
 """
 
 import argparse

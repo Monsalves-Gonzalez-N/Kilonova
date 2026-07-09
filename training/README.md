@@ -1,54 +1,41 @@
-# Kilonova transformer — paquete de entrenamiento (Colab GPU, datos reales)
+# Kilonova transformer — entrenamiento (OpenUniverse, GPU local)
 
-Entrena `KilonovaTransformer` sobre la **fotometría real de Hourglass**. Listo para correr en
-la GPU gratis de Colab — no necesita los espectros LANL de 10 GB.
+Entrena `KilonovaTransformer` sobre las **ventanas tempranas de OpenUniverse**: contaminantes
+Roman (`early_windows_{deep,wide}.parquet`) + kilonovas LANL inyectadas
+(`kilonova_windows_{deep,wide}.hdf5`), generados por el pipeline de `src/kilonova/`.
+Clasificación binaria `{KN, other}` (~1.9M objetos, ~324k KN).
 
 ```
-kilonova_colab/
-├── train_colab.ipynb          # ← abrir esto en Colab
-├── train.py                   # loop de entrenamiento (GPU, class weights, checkpoint)
-├── model.py                   # KilonovaTransformer (extraído de transformer_architecture.ipynb)
-├── hourglass_data.py          # DataLoaders Hourglass (extraído de hourglass_eda.ipynb)
-├── requirements.txt
-├── data/dust_generation/
-│   ├── hourglass_objects.parquet      # 5.6 MB
-│   └── hourglass_photometry.parquet   # 141 MB
-└── notebooks/                 # los notebooks originales, solo de referencia
-    ├── transformer_architecture.ipynb
-    └── hourglass_eda.ipynb
+training/
+├── train_local.ipynb      # ← notebook de entrenamiento (RTX 4060 local)
+├── train_lightning.py     # LightningModule: AdamW, class weights, checkpoints, early stopping
+├── model.py               # KilonovaTransformer (encoder-only, ver notebooks/transformer_architecture.ipynb)
+├── openuniverse_data.py   # DataLoaders: split 90/5/5, KN por simulation_id, contaminantes por object_id
+├── evaluation.ipynb       # métricas, matriz de confusión, contaminantes, model soup
+├── docs/                  # tokens, arquitectura, parámetros KN, desglose de la clase "other"
+└── requirements.txt
 ```
 
-`model.py` y `hourglass_data.py` son el **código núcleo extraído verbatim** de los dos
-notebooks (sin las celdas de EDA/plots). El batch que produce `hourglass_data.collate_token_windows`
-tiene exactamente las llaves que consume `KilonovaTransformer.forward()`.
+## Correr
 
-## Correr en Colab (GPU)
-
-1. Sube `kilonova_colab.zip` a Google Drive.
-2. Nuevo notebook Colab → **Runtime → Change runtime type → GPU (T4)**.
-3. Abre `train_colab.ipynb` (o pega sus celdas) y ejecútalas. La primera monta Drive,
-   descomprime y hace `%cd` a la carpeta; el resto entrena.
-
-Equivalente en una línea desde una celda:
-```python
-!python train.py --data-dir data/dust_generation --epochs 30 --batch-size 64
+```bash
+python train_lightning.py --data-dir <dir con parquet/hdf5> --epochs 50
 ```
+
+Los datos viven fuera del repo (ver `configs/paths.yaml` / DVC); los checkpoints y
+`lightning_logs/` se quedan locales.
 
 ## Qué entrena
 
-- **Clases** `{Ia, II, other, KN}`. KN (índice 3) queda **vacío** en este set survey-only — el
-  modelo aprende a separar los tres contaminantes. La inyección de KN llega después con el
-  dataloader LANL (no incluido aquí); la arquitectura ya reserva el slot.
-- **Split** estratificado y agrupado por `cid` (70/15/15), sin fuga entre train/val/test.
-- **Normalización** de magnitud ajustada solo en train.
-- **Class weights** inversos a la frecuencia (Ia/II dominan, `other` es raro).
-- Guarda el mejor checkpoint por val-accuracy en `kilonova_transformer.pt`.
+- **Clases** `{KN, other}` con pesos inversos a la frecuencia.
+- **Split** 90/5/5: KN separadas por `simulation_id`, contaminantes por `object_id`
+  estratificado por clase — sin fuga entre train/val/test.
+- **Selección de modelo** por `val_acc_noz` (KN y contaminantes son casi disjuntos en
+  redshift, así que `val_acc_z` es un artefacto).
+- `evaluation.ipynb` incluye el *model soup* de los mejores checkpoints.
 
-Verificado localmente (env `KN_class`): 44 591 objetos de train, ~75 k parámetros,
-val-acc ≈ 0.72 tras 1 epoch en CPU. En la GPU de Colab cada epoch es mucho más rápido.
+## Hourglass
 
-## NO incluido
-
-Los espectros de KN (`lanl_spectra.parquet`, ~10 GB) y el pipeline de inyección
-(`kilonova_dataloader.ipynb`, requiere astropy/dustmaps/speclite/pyphot) — demasiado grandes
-para Drive/Colab free. Por eso la clase KN está vacía por ahora.
+La fotometría de Hourglass ya **no** se usa para generar datos de entrenamiento; solo sirve
+para validar la receta de ruido (`notebooks/validation/validate_noise_recipe.ipynb`,
+`docs/hourglass_noise_recipe.md`).

@@ -1,6 +1,6 @@
 """OpenUniverse dataloader for the kilonova classifier (KN vs. everything else).
 
-Replaces hourglass_data.py for the new OpenUniverse early-window dataset. Four source files:
+Four source files:
 
     * kilonova_windows_deep.hdf5  / kilonova_windows_wide.hdf5   -> the KN class
     * early_windows_deep.parquet  / early_windows_wide.parquet   -> the contaminants
@@ -446,8 +446,7 @@ def build_dataloaders(deep_hdf5, wide_hdf5, deep_parquet, wide_parquet, batch_si
                       fractions=(0.90, 0.05, 0.05), split_seed=42, train_seed=0,
                       num_workers=8, cache_path=None, verbose=True):
     """Read the four OpenUniverse sources, build the leakage-aware 90/5/5 split, fit magnitude
-    normalization on TRAIN detections, and return the dataloaders + metadata. Same output
-    contract as hourglass_data.build_dataloaders."""
+    normalization on TRAIN detections, and return the dataloaders + metadata."""
     global MAG_MEAN, MAG_STD, SIGMA_MAG_MEAN, SIGMA_MAG_STD
 
     big, meta = _load_or_build(cache_path, deep_hdf5, wide_hdf5, deep_parquet, wide_parquet, verbose)
