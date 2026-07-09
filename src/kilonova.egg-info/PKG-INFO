@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: kilonova
+Version: 0.1.0
+Summary: Kilonova vs contaminant classification on Roman Space Telescope light curves: simulation pipelines and datasets
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scipy
+Requires-Dist: astropy
+Requires-Dist: pyarrow
+Requires-Dist: h5py
+Requires-Dist: pyyaml
+Requires-Dist: matplotlib
+Requires-Dist: torch
+Requires-Dist: specutils
+Requires-Dist: dust_extinction
+Requires-Dist: dustmaps
+Provides-Extra: sim
+Requires-Dist: pyphot; extra == "sim"
+Requires-Dist: ray; extra == "sim"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: pre-commit; extra == "dev"
+Requires-Dist: dvc; extra == "dev"
+Requires-Dist: jupyter; extra == "dev"

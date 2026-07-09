@@ -1,0 +1,35 @@
+# Pipeline stages (dvc repro). The producer of the dvc-added lanl_spectra.parquet is
+# kn-cache-lanl; it is not a stage here because its raw input (kn_sim_cube_v1, on the
+# Elements drive) is not always mounted — regenerate manually and `dvc add` the result.
+# kn-run-openuniverse likewise reads the OpenUniverse source from /Volumes/T7 (see
+# configs/paths.yaml); mount it before running dvc repro.
+
+stages:
+  extinguish:
+    cmd: >-
+      kn-extinguish
+      --output data/dust_generation/lanl_extinguished_photometry.parquet
+      --detection-mag-limit ${extinguish.detection_mag_limit}
+      --redshift-min ${extinguish.redshift_min}
+      --redshift-max ${extinguish.redshift_max}
+      --n-redshift ${extinguish.n_redshift}
+    params:
+      - extinguish
+    deps:
+      - data/dust_generation/lanl_spectra.parquet
+      - data/kcor/kcor_ROMAN.fits
+      - data/dust_generation/hourglass_objects.parquet
+      - src/kilonova/simulation/extinction.py
+    outs:
+      - data/dust_generation/lanl_extinguished_photometry.parquet
+
+  early_windows:
+    cmd: kn-run-openuniverse --output-dir data/openuniverse
+    deps:
+      - data/dust_generation/lanl_spectra.parquet
+      - src/kilonova/simulation/early_windows.py
+      - src/kilonova/photometry/roman_noise.py
+      - src/kilonova/photometry/spectra.py
+    outs:
+      - data/openuniverse/early_windows_deep.parquet
+      - data/openuniverse/early_windows_wide.parquet

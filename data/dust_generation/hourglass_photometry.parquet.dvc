@@ -1,0 +1,5 @@
+outs:
+- md5: de3f3db31096cb7cfd46a7c9fc71773b
+  size: 148060807
+  hash: md5
+  path: hourglass_photometry.parquet

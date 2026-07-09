@@ -1,0 +1,5 @@
+extinguish:
+  detection_mag_limit: 28.0
+  redshift_min: 0.003
+  redshift_max: 1.0
+  n_redshift: 50

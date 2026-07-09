@@ -1,0 +1,4 @@
+[core]
+    remote = elements
+['remote "elements"']
+    url = /Volumes/Elements/dvc-kilonova

@@ -1,0 +1,14 @@
+# Data locations for the kilonova pipelines. Relative paths resolve against the
+# repository root; absolute paths point at external volumes that must be mounted.
+# Any field can be overridden with KN_<FIELD> (e.g. KN_LANL_SPECTRA) or a CLI flag.
+
+openuniverse_source: /Volumes/T7/openuniverse2025
+openuniverse_hdf5: data/openuniverse/snana_10307_full.hdf5
+openuniverse_catalog: data/openuniverse/snana_10307.parquet
+lanl_spectra: data/dust_generation/lanl_spectra.parquet
+# Historical raw source of lanl_spectra.parquet (old grid; only needed to rebuild the cache).
+lanl_grid_dir: /Volumes/Elements/kilonova/LANL_grid/kn_sim_cube_v1
+lanl_catalog: data/lanl_catalog.parquet
+kcor: data/kcor/kcor_ROMAN.fits
+hourglass_objects: data/dust_generation/hourglass_objects.parquet
+output_dir: data/openuniverse

@@ -1,0 +1,93 @@
+# Kilonova
+
+Kilonova vs contaminant classification on Roman Space Telescope light curves. This repository
+holds the **data-simulation side** of the project: the pipelines that turn the LANL kilonova
+spectral grid and the OpenUniverse Roman TDS simulation into early-window light curves with a
+realistic Roman HLTDS noise recipe, plus the PyTorch dataset that tokenizes them for the
+classification transformer. The science plan lives in [docs/plan.md](docs/plan.md).
+
+```
+LANL .dat grid ──kn-cache-lanl──▶ lanl_spectra.parquet ──┬─▶ kn-extinguish ─▶ extinguished photometry
+                                                         │
+OpenUniverse snana hdf5 + catalogs ──kn-run-openuniverse─┴─▶ early_windows_{deep,wide}.parquet
+                                                              │
+                                                              ▼
+                                              kilonova.datasets.openuniverse (transformer tokens)
+```
+
+## Setup
+
+The package is pip-installable, but `galsim` is conda-forge-only, so the supported setup is the
+conda environment (which pip-installs the package into itself):
+
+```bash
+conda env create -f environment.yml
+conda activate kilonova
+```
+
+For a galsim-free environment (e.g. serving, where only `kilonova.datasets` / `kilonova.config`
+are needed), plain `pip install -e .` works: galsim is imported lazily and only required by
+`kilonova.photometry` at call time.
+
+## Data
+
+Large files never live in git. There are two kinds:
+
+- **DVC-tracked artifacts** (`*.dvc` pointer files): `lanl_spectra.parquet`,
+  `hourglass_photometry.parquet`, `kilonova_windows_*.hdf5`. Get them with `dvc pull`
+  (remote: `/Volumes/Elements/dvc-kilonova`, mount the drive first); publish new versions with
+  `dvc add <file> && dvc push`.
+- **External sources** (documented, not tracked): the OpenUniverse snana files on
+  `/Volumes/T7/openuniverse2025` (see `data/openuniverse/download_openuniverse_snana.sh`) and
+  the raw LANL grid `kn_sim_cube_v1` on the Elements drive.
+
+All locations are configured in [`configs/paths.yaml`](configs/paths.yaml) — nothing is
+hardcoded. Precedence: **CLI flag > `KN_<FIELD>` environment variable > YAML**. Example:
+`KN_OPENUNIVERSE_SOURCE=/other/disk kn-run-openuniverse`.
+
+## Pipelines
+
+| Command | What it does |
+|---|---|
+| `kn-cache-lanl` | LANL `.dat` grid → one parquet of rest-frame spectra (Ray-parallel) |
+| `kn-extinguish` | spectra + host/MW extinction → Roman AB photometry with STOP rules (Ray-parallel) |
+| `kn-early-windows` | one OpenUniverse field → early-window light curves per tier |
+| `kn-run-openuniverse` | all fields → combined `early_windows_{deep,wide}.parquet` |
+
+Every command accepts `--help`, `-v` for debug logging, and `--limit-ou N` (where applicable)
+for smoke tests. The `extinguish` and `early_windows` steps are also wired as DVC stages:
+`dvc repro` re-runs whatever is out of date (parameters in `params.yaml`).
+
+The full `kn-run-openuniverse` run is computationally expensive and is executed on the
+training machine; the resulting `early_windows_{deep,wide}.parquet` travel back through DVC
+(`dvc add` + `dvc push` there, `dvc pull` here). `kn-cache-lanl` is historical: it built
+`lanl_spectra.parquet` from the old raw grid (`kn_sim_cube_v1`) and only matters if the cache
+ever needs rebuilding.
+
+## Development
+
+```bash
+pytest                 # unit tests (synthetic fixtures, no real data needed)
+ruff check src tests   # lint
+ruff format src tests  # format
+pre-commit install     # run both on every commit
+```
+
+CI (GitHub Actions) runs lint plus the test suite in a slim micromamba environment with galsim;
+tests that need the `sim` extras (`ray`, `pyphot`) skip automatically there.
+
+## Repository map
+
+```
+src/kilonova/          the package (pip install -e .)
+  photometry/          Roman HLTDS noise recipe + SED→AB-mag step (galsim, lazy)
+  simulation/          LANL cache, extinction, early-window pipelines
+  datasets/            PyTorch dataset: light curves → transformer tokens
+  cli/                 argparse entry points (kn-*)
+  config.py, log.py    central paths (configs/paths.yaml) and logging setup
+configs/               machine-specific data locations
+notebooks/             exploration + validation (import from the package)
+tests/                 pytest suite with synthetic fixtures
+docs/                  science plan, noise-recipe provenance, reference notes
+data/                  data only: small tracked files, .dvc pointers, gitignored products
+```

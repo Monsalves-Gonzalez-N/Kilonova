@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kilonova"
+version = "0.1.0"
+description = "Kilonova vs contaminant classification on Roman Space Telescope light curves: simulation pipelines and datasets"
+readme = "README.md"
+requires-python = ">=3.11"
+# galsim is required by kilonova.photometry but is conda-forge-only; it is
+# provided by environment.yml, not declared here (see README).
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "astropy",
+    "pyarrow",
+    "h5py",
+    "pyyaml",
+    "matplotlib",
+    "torch",
+    "specutils",
+    "dust_extinction",
+    "dustmaps",
+]
+
+[project.scripts]
+kn-cache-lanl = "kilonova.cli.cache_lanl:main"
+kn-extinguish = "kilonova.cli.extinguish:main"
+kn-early-windows = "kilonova.cli.early_windows:main"
+kn-run-openuniverse = "kilonova.cli.run_all_openuniverse:main"
+
+[project.optional-dependencies]
+sim = [
+    "pyphot",
+    "ray",
+]
+dev = [
+    "pytest",
+    "ruff",
+    "pre-commit",
+    "dvc",
+    "jupyter",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -35,3 +35,21 @@ data/dust_generation/dustmaps/
 # Local scratch / benchmarks
 data/dust_generation/_bench_*.py
 data/dust_generation/_sanity_*.py
+
+# OpenUniverse early-windows pipeline — large inputs/outputs (regenerated / downloaded separately;
+# the versioned artifacts are tracked by DVC via their .dvc pointer files)
+data/openuniverse/*.hdf5
+data/openuniverse/*.parquet
+data/openuniverse/*.fits
+data/openuniverse/*.fits.gz
+
+# Generated figure PDFs, reference papers and local caches
+data/openuniverse/*.pdf
+data/dust_generation/*.pdf
+data/openuniverse_cache/
+docs/papers/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+src/kilonova.egg-info/
