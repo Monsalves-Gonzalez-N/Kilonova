@@ -24,23 +24,23 @@ NUM_TOKEN_TYPES = 3
 D_BAND = 16
 D_TYPE = 16
 
-TIME2VEC_FREQUENCIES = 6
+TIME2VEC_FREQUENCIES = 0  # linear term only: 3 epochs x ~5 d cadence carries no periodic structure
 DELTA_TIME_SCALE = 5.0  # the 5-day cadence; conditions raw Delta t before the time encoding
 
-BAND_ORDER = ['R', 'Z', 'Y', 'J', 'H', 'F']
-TOKEN_TYPE_ORDER = ['d', 'u', 'n']
-GROUP_ORDER = ['other', 'KN']
+BAND_ORDER = ["R", "Z", "Y", "J", "H", "F"]
+TOKEN_TYPE_ORDER = ["d", "u", "n"]
+GROUP_ORDER = ["other", "KN"]
 
 BAND_TO_INDEX = {band: index for index, band in enumerate(BAND_ORDER)}
 TOKEN_TYPE_TO_INDEX = {token_type: index for index, token_type in enumerate(TOKEN_TYPE_ORDER)}
 
 
 def scaled_dot_product(query, key, value, mask=None):
-    '''Attention for tensors shaped (..., sequence_length, head_dimension).
+    """Attention for tensors shaped (..., sequence_length, head_dimension).
 
     mask uses 1 = keep, 0 = ignore (padded key); masked logits go to -inf before the softmax.
     Returns (values, attention_weights).
-    '''
+    """
     head_dimension = query.size(-1)
     attention_logits = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(head_dimension)
     if mask is not None:
@@ -53,7 +53,7 @@ def scaled_dot_product(query, key, value, mask=None):
 class MultiheadAttention(nn.Module):
     def __init__(self, d_model, num_heads):
         super().__init__()
-        assert d_model % num_heads == 0, 'd_model must be divisible by num_heads'
+        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
         self.d_model = d_model
         self.num_heads = num_heads
         self.head_dimension = d_model // num_heads
@@ -75,9 +75,9 @@ class MultiheadAttention(nn.Module):
 
 
 class Time2Vec(nn.Module):
-    '''Continuous time encoding. Channel 0 is linear in Delta t (the decline-rate carrier); the
+    """Continuous time encoding. Channel 0 is linear in Delta t (the decline-rate carrier); the
     remaining channels are a few low-frequency sinusoids. A final linear layer lifts the
-    (num_frequencies + 1) features to output_dimension.'''
+    (num_frequencies + 1) features to output_dimension."""
 
     def __init__(self, num_frequencies, output_dimension, delta_time_scale=DELTA_TIME_SCALE):
         super().__init__()
@@ -110,16 +110,16 @@ class TokenEmbedding(nn.Module):
         self.time_encoding = Time2Vec(TIME2VEC_FREQUENCIES, d_model)
 
     def forward(self, batch):
-        band = self.band_embedding(batch['band_index'])
-        token_type = self.token_type_embedding(batch['token_type_index'])
+        band = self.band_embedding(batch["band_index"])
+        token_type = self.token_type_embedding(batch["token_type_index"])
         magnitude_features = torch.stack(
-            [batch['magnitude'], batch['sigma_magnitude'], batch['magnitude_mask'], batch['sigma_mask']],
+            [batch["magnitude"], batch["sigma_magnitude"], batch["magnitude_mask"], batch["sigma_mask"]],
             dim=-1,
         )
         magnitude = self.magnitude_projection(magnitude_features)
         content = torch.cat([band, token_type, magnitude], dim=-1)
         content = self.content_norm(self.content_projection(content))
-        return content + self.time_encoding(batch['delta_time'])
+        return content + self.time_encoding(batch["delta_time"])
 
 
 class GlobalTokens(nn.Module):
@@ -130,13 +130,14 @@ class GlobalTokens(nn.Module):
         self.redshift_projection = nn.Linear(2, d_model)
 
     def forward(self, batch):
-        batch_size = batch['redshift'].shape[0]
+        batch_size = batch["redshift"].shape[0]
         cls_token = self.cls_token.expand(batch_size, -1, -1)
-        redshift_features = torch.stack([batch['redshift'], batch['redshift_error']], dim=-1)
+        redshift_features = torch.stack([batch["redshift"], batch["redshift_error"]], dim=-1)
         redshift_token = self.redshift_projection(redshift_features).unsqueeze(1)
-        has_redshift = batch['has_redshift'].view(batch_size, 1, 1)
-        redshift_token = (has_redshift * redshift_token
-                          + (1.0 - has_redshift) * self.no_redshift_token.expand(batch_size, -1, -1))
+        has_redshift = batch["has_redshift"].view(batch_size, 1, 1)
+        redshift_token = has_redshift * redshift_token + (1.0 - has_redshift) * self.no_redshift_token.expand(
+            batch_size, -1, -1
+        )
         return cls_token, redshift_token
 
 
@@ -182,14 +183,26 @@ class TransformerEncoder(nn.Module):
 
 
 class KilonovaTransformer(nn.Module):
-    def __init__(self, d_model=D_MODEL, num_heads=NUM_HEADS, num_layers=NUM_LAYERS,
-                 d_feedforward=D_FEEDFORWARD, dropout=DROPOUT, num_classes=NUM_CLASSES):
+    def __init__(
+        self,
+        d_model=D_MODEL,
+        num_heads=NUM_HEADS,
+        num_layers=NUM_LAYERS,
+        d_feedforward=D_FEEDFORWARD,
+        dropout=DROPOUT,
+        num_classes=NUM_CLASSES,
+    ):
         super().__init__()
         self.token_embedding = TokenEmbedding(d_model=d_model)
         self.global_tokens = GlobalTokens(d_model=d_model)
         self.input_dropout = nn.Dropout(dropout)
-        self.encoder = TransformerEncoder(num_layers=num_layers, d_model=d_model, num_heads=num_heads,
-                                          d_feedforward=d_feedforward, dropout=dropout)
+        self.encoder = TransformerEncoder(
+            num_layers=num_layers,
+            d_model=d_model,
+            num_heads=num_heads,
+            d_feedforward=d_feedforward,
+            dropout=dropout,
+        )
         self.classification_norm = nn.LayerNorm(d_model)
         self.classification_head = nn.Linear(d_model, num_classes)
 
@@ -200,7 +213,7 @@ class KilonovaTransformer(nn.Module):
         sequence = self.input_dropout(sequence)
 
         batch_size, total_length, _ = sequence.shape
-        token_valid = ~batch['padding_mask']
+        token_valid = ~batch["padding_mask"]
         global_valid = torch.ones(batch_size, 2, dtype=torch.bool, device=token_valid.device)
         valid = torch.cat([global_valid, token_valid], dim=1)
         attention_mask = valid.view(batch_size, 1, 1, total_length)
