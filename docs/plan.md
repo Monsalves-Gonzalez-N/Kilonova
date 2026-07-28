@@ -5,8 +5,17 @@
 > (embedded in `kilonova.photometry.roman_noise`, provenance in `docs/hourglass_noise_recipe.md`
 > and `notebooks/validation/validate_noise_recipe.ipynb`). The "two-stage Hourglass →
 > OpenUniverse" sections below are therefore superseded and kept for the record; the token
-> specification, matched-twin construction, model spec and evaluation sections remain current.
+> specification, model spec and evaluation sections remain current.
 > Pending review by the author.
+
+> **Status note (2026-07-28).** The **matched-twin construction is superseded**: LANL kilonovae
+> are too faint in Roman to have analogues among the OpenUniverse contaminants, so injecting a KN
+> twin per low-z contaminant at that contaminant's z was discarded. KNe are now simulated as a
+> **LANL grid over a grid of redshifts**, independent of the contaminant population, with the same
+> noise recipe and window logic as the contaminants. The z-leakage risk that motivated the twin
+> (batch prior p(KN | z)) still applies and its diagnostics remain current; the mitigation is now
+> the choice of the KN redshift grid, not per-object z-matching. Sections mentioning "twin" /
+> "matched-twin" are kept for the record.
 
 ## Goal
 
@@ -18,7 +27,7 @@ Classify kilonovae (KNe) among transients observed by the Roman Space Telescope 
 
 - **Contaminants — stage 1 (development)**: Hourglass simulated catalog (~10k events), dominated by SN Ia and SN II, redshift up to ~3. Contains **zero KNe**. Band×tier coverage is incomplete (wide `RZYJ`, deep `YJHF` — see coverage caveat); this is the set the architecture is built and the degradation matrix is first measured on.
 - **Contaminants — stage 2 (fine-tuning)**: OpenUniverse Roman TDS transient light curves. Full **5-band** Roman filter set with **no wide/deep tier split**, so no per-tier missing-filter pattern — the more realistic and complete coverage. The fine-tuning target (see Two-stage training).
-- **Kilonovae**: injected from model grids (Kasen `kasen_kn.h5`, LANL `lanl_catalog.parquet`). Grid combinations reach ~3e8 light curves, many degenerate (different masses / wind / angle, identical light curve). **Both stages use this same injection pipeline** (matched-twin construction); in stage 2 the twin inherits OpenUniverse's full-band, untiered observing conditions.
+- **Kilonovae**: injected from the LANL model grid (`lanl_spectra.parquet`), simulated over a **grid of redshifts** with the same noise recipe, cadence and window logic as the contaminants (superseding the matched-twin construction — see the 2026-07-28 status note). Grid combinations reach ~3e8 light curves, many degenerate (different masses / wind / angle, identical light curve).
 - KNe likely only classifiable out to z ≈ 0.5, but injections span the full detectable z range — the 5σ detectability cut does the physical filtering, no hard z cut.
 - Observing structure: max 3 epochs spaced 5 days, up to 4 bands per epoch → **max 12 observations per event** the model sees at once. A **4th detection epoch is kept per object** as a buffer for the shift augmentation (see Early classification).
 - **Simulation coverage caveat**: Hourglass simulated only 4 of the 5 ROTAC tier bands (wide `RZYJ`, missing H; deep `YJHF`, missing Z), whereas OpenUniverse carries the full filter set and was not split into wide/deep tiers at all. The two simulations therefore have **different, complementary band×tier coverage** — which is exactly what the two-stage training exploits: build on Hourglass's tiered-but-incomplete grid, then fine-tune onto OpenUniverse's complete-but-untiered one (see Two-stage training). Both are accepted as-is for the methodology paper (same spirit as the Hourglass scope decision) and recalibrated once ROTAC/Hourglass 2.0 and the real Roman cadence exist. This coverage mismatch is the reason the token spec drops the explicit mode embedding (see Token specification): an encoder that fingerprinted Hourglass's wide/deep grid would not transfer to OpenUniverse.
@@ -46,6 +55,10 @@ One token per visit (band × time):
 Hourglass provides z (likely from the transient, not the host). Convolve with σ(mag) photo-z error distributions taken from external catalogs; realistic regime proportions as augmentation. Use the **same host-error model for injected KNe and native contaminants** so z quality cannot become a spurious injected-vs-native feature. Recalibrate via fine-tuning once real Roman photo-z distributions exist.
 
 ## Redshift leakage and the matched-twin construction
+
+> **Superseded (2026-07-28).** The twin construction below was discarded — LANL KNe are too faint
+> to have OU analogues at a shared z. The leakage analysis and the diagnostics remain current; the
+> mitigation now lives in the design of the KN redshift grid.
 
 z plays two distinct roles in the classifier:
 
@@ -85,14 +98,14 @@ Small transformer encoder (2–4 layers, d_model 64–128) + `[CLS]` + softmax h
 - Precedent: this is essentially a small ATAT with upper-limit/gap tokens and a global z token. References: **ATAT** (Cabrera-Vives et al. 2024, A&A, arXiv:2405.03078), **Astromer** (Donoso-Oliva et al. 2023, A&A 670, A54, arXiv:2205.01677), **t2** (Allam & McEwen, arXiv:2105.06178).
 - **Baseline for the paper**: LightGBM/MLP on summary features (per-band decline rate, colors, peak mag, z) so the transformer's degradation matrix is measured against something.
 
-**Multiclass**: `{Ia, II, other (lumped), KN}`. Class-balanced batches: KNe come from the matched-twin construction (one per low-z contaminant; oversample low-z pairs to balance), minority contaminant classes oversampled. Real prevalence (~100 KNe vs 10k contaminants over the cycle) enters only at threshold calibration, never in training.
+**Multiclass**: `{Ia, II, other (lumped), KN}`. Class-balanced batches: KNe come from the redshift-grid injection (oversampled to balance), minority contaminant classes oversampled. Real prevalence (~100 KNe vs 10k contaminants over the cycle) enters only at threshold calibration, never in training.
 
 ## On-the-fly KN generation (no materialized 300M curves)
 
 Factorization:
 
 1. **Precompute once**: rest-frame grid photometry on `(model, phase, band, z)` — interpolation over the existing Ray-parallel spectrum cache + Roman AB photometry.
-2. **Per batch**: sample (model, extinction) + take the observing conditions **and redshift** of the twin contaminant (cadence, depths, z, z-regime — see matched-twin construction above) + interpolate grid + noise draw. Pure indexing + Gaussian noise in the dataloader, CPU-only. Extinction follows the **same treatment Hourglass applies to contaminants**.
+2. **Per batch**: sample (model, extinction, z from the KN redshift grid) + apply the tier's own observing conditions (cadence, per-visit depths, z-regime — same recipe as the contaminants) + interpolate grid + noise draw. Pure indexing + Gaussian noise in the dataloader, CPU-only. Extinction follows the **same treatment applied to contaminants**.
 
 Generator policies:
 
@@ -104,7 +117,7 @@ Generator policies:
 
 One model, random prefix truncation during training: {epoch 1 (≤4 tokens), epochs 1–2 (≤8), full (≤12)}. Epochs measured from first detection. Evaluation = inference on prefixes; no separate per-epoch models.
 
-**Shift augmentation (late onset).** Per object, with independent probability **0.20 each time it is drawn into a batch**, slide the observation window forward by one epoch: drop epoch 1, re-anchor Δt at epoch 2, feed epochs {2, 3, 4}. Applied only to **shift-eligible** objects — a detection in epoch 1 *and* a detection in epoch 2 (≥2 detection visits); this is why the 4th detection epoch is kept. The shift uses only real detections (no synthetic pre-detection limit) and simulates the ~20% of events the uniform [0, 5)-day explosion phase catches ≥4 days old. The draw is **stochastic in the dataloader (fresh each epoch), not a fixed split**; because it is conditional on eligibility, the shifted fraction of a batch is `0.20 × (fraction eligible)`, not 0.20 of all objects. KN twins **inherit the shifted observing conditions** so the regime stays symmetric across classes.
+**Shift augmentation (late onset).** Per object, with independent probability **0.20 each time it is drawn into a batch**, slide the observation window forward by one epoch: drop epoch 1, re-anchor Δt at epoch 2, feed epochs {2, 3, 4}. Applied only to **shift-eligible** objects — a detection in epoch 1 *and* a detection in epoch 2 (≥2 detection visits); this is why the 4th detection epoch is kept. The shift uses only real detections (no synthetic pre-detection limit) and simulates the ~20% of events the uniform [0, 5)-day explosion phase catches ≥4 days old. The draw is **stochastic in the dataloader (fresh each epoch), not a fixed split**; because it is conditional on eligibility, the shifted fraction of a batch is `0.20 × (fraction eligible)`, not 0.20 of all objects. Injected KNe **get the same shift policy** so the regime stays symmetric across classes.
 
 **Single-epoch fast faders are hard negatives, not discards.** Objects detected in only one visit (`n_detection_epochs == 1`) decay too fast for a second epoch — morphologically the closest contaminants to a KN. They stay in the training set as hard negatives, are never shifted, and get their own **class × z census** (parallel to `tab:class_redshift`, restricted to single-epoch detections) to expose which classes the recall-first model will most confuse with KNe.
 

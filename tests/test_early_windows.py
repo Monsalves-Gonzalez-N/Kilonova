@@ -50,21 +50,23 @@ def test_build_window_none_when_undetectable(tier_constants):
     assert early_windows.build_window_from_model("123", {}, tier_constants, 0.2, 10) is None
 
 
+def test_sample_kn_realizations_on_grid_covers_every_redshift():
+    redshift_grid = np.geomspace(0.01, 1.0, 5)
+    realizations = early_windows.sample_kn_realizations_on_grid(
+        redshift_grid, realizations_per_redshift=3, simulation_pool=[7, 8], rng=np.random.default_rng(0)
+    )
+    assert len(realizations) == 15
+    assert sorted(realizations) == [realization["noise_id"] for realization in realizations.values()]
+    redshift_counts = {}
+    for realization in realizations.values():
+        assert realization["simulation_id"] in (7, 8)
+        assert 0.0 <= realization["explosion_offset_days"] < early_windows.EXPLOSION_OFFSET_MAX_DAYS
+        assert 0 <= realization["angle_index"] < early_windows.N_ANGLE_BINS
+        redshift_counts[realization["redshift"]] = redshift_counts.get(realization["redshift"], 0) + 1
+    assert redshift_counts == {float(redshift): 3 for redshift in redshift_grid}
+
+
 def test_collect_object_records_drops_fixmag_and_limits(field_catalog_parquet):
     records = early_windows.collect_object_records(field_catalog_parquet)
     assert [record[0] for record in records] == [1, 2, 3]  # gentype 99 dropped
     assert early_windows.collect_object_records(field_catalog_parquet, limit=2) == records[:2]
-
-
-def test_sample_kn_realizations_low_z_only(field_catalog_parquet):
-    import pandas as pd
-
-    transients = pd.read_parquet(field_catalog_parquet)
-    realizations = early_windows.sample_kn_realizations(
-        transients, simulation_pool=[7, 8], rng=np.random.default_rng(0)
-    )
-    # only 0 < z < 0.5 objects get a kilonova twin (ids 1, 2 and 4)
-    assert set(realizations) == {-1, -2, -4}
-    for realization in realizations.values():
-        assert realization["simulation_id"] in (7, 8)
-        assert 0.0 <= realization["explosion_offset_days"] < early_windows.EXPLOSION_OFFSET_MAX_DAYS

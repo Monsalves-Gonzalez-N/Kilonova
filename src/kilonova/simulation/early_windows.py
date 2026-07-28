@@ -33,14 +33,14 @@ logger = logging.getLogger(__name__)
 LANL_METADATA_COLUMNS = ["simulation_id", "time_index", "time_days", "angle_index"]
 N_ANGLE_BINS = 54
 
-# Inyeccion de kilonovas: una KN por transiente con z < KN_REDSHIFT_MAX, a ese mismo z.
-KN_REDSHIFT_MAX = 0.5
+# Inyeccion de kilonovas: grilla LANL simulada sobre una grilla de redshifts (las KN LANL son
+# demasiado debiles para tener analogas en el catalogo OU, asi que no se emparejan por transiente).
 KN_REALIZATION_SEED = 0  # reproducibilidad del sorteo simulacion/angulo/offset
 N_KN_VISITS = 8  # visitas sinteticas (margen para hallar 1a deteccion + 4 epocas)
 EXPLOSION_OFFSET_MAX_DAYS = 5.0  # t0 ~ U[0, max]: dias observador entre el merger y la 1a visita
 KN_GENTYPE = 50
-# Offset para la semilla de ruido de las KN: las KN ya no usan object_id (ahora string) para sembrar,
-# asi que el ruido se siembra con KN_SEED_OFFSET + id_fuente, disjunto de los ids OU (~8e7).
+# Offset para la semilla de ruido de las KN: se siembra con KN_SEED_OFFSET + noise_id de la
+# realizacion, disjunto de los ids OU (~8e7).
 KN_SEED_OFFSET = 2_000_000_000
 
 NUMBER_OF_EPOCHS = 4
@@ -289,23 +289,22 @@ def nearest_time_index(simulation_time_grids, simulation_id, rest_phase_days):
     return int(time_index_array[nearest_position])
 
 
-def sample_kn_realizations(transients, simulation_pool, rng, redshift_max=KN_REDSHIFT_MAX):
-    """Una KN aleatoria por transiente con 0 < z_CMB < redshift_max: simulacion + angulo + offset de
-    explosion, al z del transiente. kn_object_id = -id_fuente (distingue de OU y siembra el ruido).
-    El sorteo es fijo por transiente y se comparte entre tiers (la misma KN observada en deep y wide)."""
+def sample_kn_realizations_on_grid(redshift_grid, realizations_per_redshift, simulation_pool, rng):
+    """realizations_per_redshift sorteos (simulacion, angulo, offset de explosion) por cada z de la
+    grilla. noise_id secuencial siembra el ruido; el mismo set de realizaciones se comparte entre
+    tiers (la misma KN observada en deep y wide)."""
     realizations = {}
-    for row in transients.itertuples():
-        redshift = float(row.z_CMB)
-        if not (0.0 < redshift < redshift_max):
-            continue
-        kn_object_id = -int(row.id)
-        realizations[kn_object_id] = {
-            "source_object_id": int(row.id),
-            "redshift": redshift,
-            "simulation_id": int(rng.choice(simulation_pool)),
-            "angle_index": int(rng.integers(N_ANGLE_BINS)),
-            "explosion_offset_days": float(rng.uniform(0.0, EXPLOSION_OFFSET_MAX_DAYS)),
-        }
+    noise_id = 0
+    for redshift in np.asarray(redshift_grid, dtype=float):
+        for _ in range(realizations_per_redshift):
+            realizations[noise_id] = {
+                "noise_id": noise_id,
+                "redshift": float(redshift),
+                "simulation_id": int(rng.choice(simulation_pool)),
+                "angle_index": int(rng.integers(N_ANGLE_BINS)),
+                "explosion_offset_days": float(rng.uniform(0.0, EXPLOSION_OFFSET_MAX_DAYS)),
+            }
+            noise_id += 1
     return realizations
 
 
@@ -370,12 +369,13 @@ def kn_windows_for_tier(kn_models, constants):
     start = time.time()
     for counter, (_kn_object_id, (model_6band, base_epochs, realization)) in enumerate(kn_models.items()):
         model_tier = {band: series for band, series in model_6band.items() if band in tier_bands}
-        # object_id de la KN = simulation_id_angle_index_explosion_offset_days (toda la realizacion).
+        # object_id de la KN = simulation_id_angle_index_explosion_offset_days_redshift (toda la
+        # realizacion; el z va incluido porque la grilla repite sim/angulo/offset a distintos z).
         kn_id = (
             f"{realization['simulation_id']}_{realization['angle_index']}_"
-            f"{realization['explosion_offset_days']:.4f}"
+            f"{realization['explosion_offset_days']:.4f}_{realization['redshift']:.4f}"
         )
-        noise_seed = KN_SEED_OFFSET + realization["source_object_id"]
+        noise_seed = KN_SEED_OFFSET + realization["noise_id"]
         window = build_window_from_model(
             kn_id,
             model_tier,
@@ -401,6 +401,31 @@ def kn_windows_for_tier(kn_models, constants):
                 time.time() - start,
             )
     return windows, n_detected, n_skipped
+
+
+def run_kn_tier(tier, kn_models, output_path):
+    constants = build_tier_constants(tier)
+    logger.info(
+        "[%s] field=%s  noise_floor_variance: %s",
+        tier,
+        constants["field_name"],
+        ", ".join(f"{b}={v:.0f}" for b, v in constants["noise_floor_variance"].items()),
+    )
+    windows, n_detected, n_skipped = kn_windows_for_tier(kn_models, constants)
+    if not windows:
+        logger.warning("[%s] no kilonova reached a detection; nothing written", tier)
+        return 0
+    result = pd.concat(windows, ignore_index=True)
+    result.to_parquet(output_path, index=False)
+    logger.info(
+        "[%s] DONE kilonovas detected=%d skipped=%d rows=%d -> %s",
+        tier,
+        n_detected,
+        n_skipped,
+        len(result),
+        output_path,
+    )
+    return n_detected
 
 
 def collect_object_records(catalog_path, limit=None):
