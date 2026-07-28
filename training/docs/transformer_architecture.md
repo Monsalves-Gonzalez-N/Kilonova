@@ -40,8 +40,8 @@ codificación temporal (`content + time_encoding(delta_time)`).
 ## Tokens globales
 
 - **`[CLS]`**: token aprendido, se usa su salida final para clasificar.
-- **Token de redshift**: si el objeto tiene z conocido, se proyecta `(redshift,
-  redshift_error)` a `d_model`; si no, se usa un token aprendido `no_redshift_token`
+- **Token de redshift**: si el objeto tiene z conocido, se proyecta `redshift` a
+  `d_model`; si no, se usa un token aprendido `no_redshift_token`
   (permite entrenar/evaluar en los regímenes "con z" y "sin z" del mismo modelo).
 
 La secuencia de entrada al encoder es: `[CLS, token_z, token_1, token_2, ..., token_N]`

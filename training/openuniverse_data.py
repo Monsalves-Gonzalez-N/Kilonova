@@ -82,7 +82,7 @@ PER_TOKEN_KEYS = [
     "magnitude_mask",
     "sigma_mask",
 ]
-GLOBAL_KEYS = ["redshift", "redshift_error", "has_redshift"]
+GLOBAL_KEYS = ["redshift", "has_redshift"]
 
 SHIFT_PROBABILITY = 0.20  # slide the window forward by one epoch (late-onset sim)
 REDSHIFT_DROPOUT_PROBABILITY = 0.50  # hide z from the model -> learned [NO_Z] token
@@ -450,7 +450,6 @@ class OpenUniverseWindowDataset(Dataset):
             "magnitude_mask": torch.from_numpy(magnitude_mask.astype(np.float32)),
             "sigma_mask": torch.from_numpy(sigma_mask.astype(np.float32)),
             "redshift": torch.tensor(redshift_for_input if has_redshift else 0.0, dtype=torch.float32),
-            "redshift_error": torch.tensor(0.0, dtype=torch.float32),
             "has_redshift": torch.tensor(float(has_redshift), dtype=torch.float32),
             "label": torch.tensor(self.label_by_index[object_index], dtype=torch.long),
             "cid": torch.tensor(object_index, dtype=torch.long),

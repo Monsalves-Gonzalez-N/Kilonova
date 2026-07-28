@@ -54,14 +54,13 @@ realmente ausente).
 ## Redshift (features globales, no por token)
 
 - `redshift`: el z verdadero del objeto (o `NaN`/0.0 si se oculta — ver dropout abajo).
-- `redshift_error`: siempre `0.0` en este dataset (OpenUniverse no trae error de z).
 - `has_redshift`: 1.0 si el modelo recibe z en este ejemplo, 0.0 si no.
 - **Redshift dropout** (`REDSHIFT_DROPOUT_PROBABILITY = 0.50` en train): la mitad de las
   veces se oculta el z real al modelo (`has_redshift=0`), para que aprenda a clasificar
   también sin z. En validación se evalúan ambos regímenes por separado
   (`val_acc_z` vs `val_acc_noz`).
 - Si no hay z (`has_redshift=False`), el modelo usa un token aprendido `no_redshift_token`
-  en vez de proyectar `(redshift, redshift_error)` (ver `GlobalTokens` en `model.py`).
+  en vez de proyectar `redshift` (ver `GlobalTokens` en `model.py`).
 
 ## Augmentation de ventana (solo train)
 

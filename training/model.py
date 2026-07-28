@@ -21,8 +21,11 @@ NUM_CLASSES = 2
 
 NUM_BANDS = 6
 NUM_TOKEN_TYPES = 3
-D_BAND = 16
-D_TYPE = 16
+# An embedding table of N rows feeding a linear layer has effective rank <= min(N, D): any
+# D >= N is exactly as expressive, so D = N is the smallest lossless choice.
+D_BAND = 6
+D_TYPE = 3
+NUM_MAGNITUDE_FEATURES = 4  # [mag, sigma_mag, mag_mask, sigma_mask]
 
 TIME2VEC_FREQUENCIES = 0  # linear term only: 3 epochs x ~5 d cadence carries no periodic structure
 DELTA_TIME_SCALE = 5.0  # the 5-day cadence; conditions raw Delta t before the time encoding
@@ -104,8 +107,9 @@ class TokenEmbedding(nn.Module):
         super().__init__()
         self.band_embedding = nn.Embedding(NUM_BANDS, D_BAND)
         self.token_type_embedding = nn.Embedding(NUM_TOKEN_TYPES, D_TYPE)
-        self.magnitude_projection = nn.Linear(4, d_model)
-        self.content_projection = nn.Linear(D_BAND + D_TYPE + d_model, d_model)
+        # The photometry features go straight into content_projection: a separate nn.Linear
+        # here would compose with it into a single affine map of rank <= 4.
+        self.content_projection = nn.Linear(D_BAND + D_TYPE + NUM_MAGNITUDE_FEATURES, d_model)
         self.content_norm = nn.LayerNorm(d_model)
         self.time_encoding = Time2Vec(TIME2VEC_FREQUENCIES, d_model)
 
@@ -116,8 +120,7 @@ class TokenEmbedding(nn.Module):
             [batch["magnitude"], batch["sigma_magnitude"], batch["magnitude_mask"], batch["sigma_mask"]],
             dim=-1,
         )
-        magnitude = self.magnitude_projection(magnitude_features)
-        content = torch.cat([band, token_type, magnitude], dim=-1)
+        content = torch.cat([band, token_type, magnitude_features], dim=-1)
         content = self.content_norm(self.content_projection(content))
         return content + self.time_encoding(batch["delta_time"])
 
@@ -127,13 +130,12 @@ class GlobalTokens(nn.Module):
         super().__init__()
         self.cls_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         self.no_redshift_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
-        self.redshift_projection = nn.Linear(2, d_model)
+        self.redshift_projection = nn.Linear(1, d_model)
 
     def forward(self, batch):
         batch_size = batch["redshift"].shape[0]
         cls_token = self.cls_token.expand(batch_size, -1, -1)
-        redshift_features = torch.stack([batch["redshift"], batch["redshift_error"]], dim=-1)
-        redshift_token = self.redshift_projection(redshift_features).unsqueeze(1)
+        redshift_token = self.redshift_projection(batch["redshift"].unsqueeze(-1)).unsqueeze(1)
         has_redshift = batch["has_redshift"].view(batch_size, 1, 1)
         redshift_token = has_redshift * redshift_token + (1.0 - has_redshift) * self.no_redshift_token.expand(
             batch_size, -1, -1

@@ -31,7 +31,6 @@ MODEL_INPUT_KEYS = [
     "magnitude_mask",
     "sigma_mask",
     "redshift",
-    "redshift_error",
     "has_redshift",
     "padding_mask",
     "label",
