@@ -181,14 +181,21 @@ def epochs_from_first_detection(epoch_times, first_detection_time, number):
 
 def bands_observed_at_visit(visit_index, bands, anchor):
     """Filters observed at one visit, indexed 0,1,2,... from the first visit. The HLTDS cadence rule:
-    the anchor band (bluest of the tier) is observed at every visit; the other bands (ordered by
-    wavelength) split into two interleaved pairs by index parity, so band i is observed at visits whose
-    index has parity i % 2 (0,2,4,... vs 1,3,5,...). => each visit observes anchor + 2 bands. This is
-    the single source of the cadence; both the per-visit and the per-band views below derive from it."""
+    the anchor band (bluest of the tier) is observed at every visit; the other four bands (ordered by
+    wavelength) split into two CONSECUTIVE pairs -- the two bluest at even visits, the two reddest at
+    odd ones -- so each visit observes anchor + 2 bands and each non-anchor band every other visit.
+    That reproduces the published HLTDS sequences RZY/RJH (wide) and ZYJ/ZHF (deep).
+
+    Grouping by index parity instead pairs the 1st non-anchor band with the 3rd, giving RZJ/RYH and
+    ZYH/ZJF: identical counts per band, but the wrong pair of filters at each visit and therefore the
+    wrong colour baselines. Counts alone do not pin the rule down, so the test asserts the sequences.
+
+    This is the single source of the cadence; both the per-visit and the per-band views below derive
+    from it."""
     others = [band for band in bands if band != anchor]
     observed = [anchor]
     for band_position, band in enumerate(others):
-        if visit_index % 2 == band_position % 2:
+        if visit_index % 2 == (band_position // 2) % 2:
             observed.append(band)
     return observed
 

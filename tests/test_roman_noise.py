@@ -26,6 +26,24 @@ def test_bands_observed_at_visit_anchor_always_plus_two():
         assert len(schedule[band]) == 3
 
 
+@pytest.mark.parametrize(
+    ("tier", "expected_sequences"),
+    [("wide", {"RZY", "RJH"}), ("deep", {"ZYJ", "ZHF"})],
+)
+def test_bands_observed_at_visit_matches_hltds_sequences(tier, expected_sequences):
+    """The published HLTDS cadence is one sequence of RZY or RJH (wide) / ZYJ or ZHF (deep) every
+    5 days. The counts asserted above do not pin this down: pairing each non-anchor band with the
+    next-but-one instead of its neighbour gives the same counts but RZJ/RYH and ZYH/ZJF, i.e. the
+    wrong two filters per visit. Assert the sequences themselves."""
+    bands = roman_noise.build_tier_constants(tier)["bands"]
+    anchor = roman_noise.TIER_ANCHOR_BAND[tier]
+    sequences = {
+        "".join(band[0] for band in roman_noise.bands_observed_at_visit(visit_index, bands, anchor))
+        for visit_index in range(6)
+    }
+    assert sequences == expected_sequences
+
+
 def test_epochs_from_first_detection_takes_n_consecutive():
     epoch_times = [0.0, 5.0, 10.0, 15.0, 20.0, 25.0]
     selected = roman_noise.epochs_from_first_detection(epoch_times, 5.0, 4)
