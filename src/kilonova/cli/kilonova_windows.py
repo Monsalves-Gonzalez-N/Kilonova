@@ -42,6 +42,12 @@ def main(argv=None):
     parser.add_argument(
         "--limit-kn", type=int, default=None, help="process only the first N realizations (smoke tests)"
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="processes over which to split the LANL simulations (1 = sequential)",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     arguments = parser.parse_args(argv)
 
@@ -77,15 +83,26 @@ def main(argv=None):
     if arguments.limit_kn is not None:
         realizations = dict(list(realizations.items())[: arguments.limit_kn])
 
-    kn_models = early_windows.build_kn_models(
-        realizations, simulation_time_grids, wavelength_rest_aa, lanl_spectra_path
-    )
-
     tiers = ["deep", "wide"] if arguments.tier == "both" else [arguments.tier]
-    summary = {}
-    for tier in tiers:
-        output_path = output_dir / f"kn_windows_{tier}.parquet"
-        summary[tier] = early_windows.run_kn_tier(tier, kn_models, output_path)
+    output_paths = {tier: output_dir / f"kn_windows_{tier}.parquet" for tier in tiers}
+
+    if arguments.workers > 1:
+        summary = early_windows.run_kn_tiers_parallel(
+            realizations,
+            simulation_time_grids,
+            wavelength_rest_aa,
+            lanl_spectra_path,
+            tiers,
+            output_paths,
+            arguments.workers,
+        )
+    else:
+        kn_models = early_windows.build_kn_models(
+            realizations, simulation_time_grids, wavelength_rest_aa, lanl_spectra_path
+        )
+        summary = {
+            tier: early_windows.run_kn_tier(tier, kn_models, output_paths[tier]) for tier in tiers
+        }
 
     for tier, n_detected in summary.items():
         print(f"{tier}: kilonovas with >=1 detection = {n_detected} / {len(realizations)}")

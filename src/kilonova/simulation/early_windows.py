@@ -1,4 +1,6 @@
 import logging
+import multiprocessing
+import os
 import time
 from collections import defaultdict
 from functools import lru_cache
@@ -308,46 +310,73 @@ def sample_kn_realizations_on_grid(redshift_grid, realizations_per_redshift, sim
     return realizations
 
 
+def kn_object_id(realization):
+    """object_id de la KN = simulation_id_angle_index_explosion_offset_days_redshift (toda la
+    realizacion; el z va incluido porque la grilla repite sim/angulo/offset a distintos z)."""
+    return (
+        f"{realization['simulation_id']}_{realization['angle_index']}_"
+        f"{realization['explosion_offset_days']:.4f}_{realization['redshift']:.4f}"
+    )
+
+
+def kn_model_from_spectra(
+    realization, simulation_spectra, simulation_time_grids, wavelength_rest_aa, bands
+):
+    """Modelo verdadero de UNA realizacion (mag AB por banda en cada visita base) a partir de los
+    espectros ya cargados de su simulacion. base_epochs = offset + 5*arange(N_KN_VISITS);
+    rest_phase = base_epoch/(1+z). Tier-independiente: depende solo de (sim, angulo, offset, z)."""
+    redshift = realization["redshift"]
+    angle_index = realization["angle_index"]
+    simulation_id = realization["simulation_id"]
+    base_epochs = realization["explosion_offset_days"] + BASE_CADENCE_DAYS * np.arange(N_KN_VISITS)
+
+    magnitudes_by_band = {band: np.full(len(base_epochs), np.nan) for band in bands}
+    for epoch_position, base_epoch in enumerate(base_epochs):
+        rest_phase_days = base_epoch / (1.0 + redshift)
+        time_index = nearest_time_index(simulation_time_grids, simulation_id, rest_phase_days)
+        flux_rest = simulation_spectra.get((angle_index, time_index))
+        if flux_rest is None:
+            continue
+        epoch_magnitudes = magnitudes_for_bands(wavelength_rest_aa, flux_rest, redshift, bands)
+        for band in bands:
+            magnitudes_by_band[band][epoch_position] = epoch_magnitudes[band]
+
+    model = {}
+    for band in bands:
+        band_magnitudes = magnitudes_by_band[band]
+        finite = np.isfinite(band_magnitudes)
+        if finite.any():
+            model[band] = (base_epochs[finite], band_magnitudes[finite])
+    return model, base_epochs
+
+
+def realizations_by_simulation(realizations):
+    """{simulation_id: [realizacion, ...]} ordenado por simulation_id. Agrupar por simulacion es lo
+    que permite leer cada row group LANL una sola vez, tanto en serie como en paralelo."""
+    by_simulation = defaultdict(list)
+    for realization in realizations.values():
+        by_simulation[realization["simulation_id"]].append(realization)
+    return dict(sorted(by_simulation.items()))
+
+
 def build_kn_models(
     realizations, simulation_time_grids, wavelength_rest_aa, lanl_spectra_path, bands=ALL_ROMAN_BANDS
 ):
-    """Modelo verdadero de cada KN (mag AB por banda en cada visita base) en UNA pasada, agrupando por
-    simulacion para leer cada row group LANL una sola vez. base_epochs = offset + 5*arange(N_KN_VISITS);
-    rest_phase = base_epoch/(1+z). Tier-independiente: depende solo de (sim, angulo, offset, z), por lo
-    que el modelo de 6 bandas y base_epochs se reusan en deep y wide.
-    Devuelve {kn_object_id: (model_6band, base_epochs, realization)}."""
-    by_simulation = defaultdict(list)
-    for kn_object_id, realization in realizations.items():
-        by_simulation[realization["simulation_id"]].append(kn_object_id)
+    """Modelo verdadero de cada KN en UNA pasada, agrupando por simulacion para leer cada row group
+    LANL una sola vez. Devuelve {kn_object_id: (model_6band, base_epochs, realization)}.
+    Ruta secuencial; para grillas grandes ver run_kn_tiers_parallel, que ademas evita materializar
+    todos los modelos a la vez."""
+    by_simulation = realizations_by_simulation(realizations)
 
     kn_models = {}
     start = time.time()
-    for counter, (simulation_id, kn_object_ids) in enumerate(by_simulation.items()):
+    for counter, (simulation_id, realization_list) in enumerate(by_simulation.items()):
         simulation_spectra = load_simulation_spectra(simulation_id, lanl_spectra_path)
-        for kn_object_id in kn_object_ids:
-            realization = realizations[kn_object_id]
-            redshift = realization["redshift"]
-            angle_index = realization["angle_index"]
-            base_epochs = realization["explosion_offset_days"] + BASE_CADENCE_DAYS * np.arange(N_KN_VISITS)
-
-            magnitudes_by_band = {band: np.full(len(base_epochs), np.nan) for band in bands}
-            for epoch_position, base_epoch in enumerate(base_epochs):
-                rest_phase_days = base_epoch / (1.0 + redshift)
-                time_index = nearest_time_index(simulation_time_grids, simulation_id, rest_phase_days)
-                flux_rest = simulation_spectra.get((angle_index, time_index))
-                if flux_rest is None:
-                    continue
-                epoch_magnitudes = magnitudes_for_bands(wavelength_rest_aa, flux_rest, redshift, bands)
-                for band in bands:
-                    magnitudes_by_band[band][epoch_position] = epoch_magnitudes[band]
-
-            model = {}
-            for band in bands:
-                band_magnitudes = magnitudes_by_band[band]
-                finite = np.isfinite(band_magnitudes)
-                if finite.any():
-                    model[band] = (base_epochs[finite], band_magnitudes[finite])
-            kn_models[kn_object_id] = (model, base_epochs, realization)
+        for realization in realization_list:
+            model, base_epochs = kn_model_from_spectra(
+                realization, simulation_spectra, simulation_time_grids, wavelength_rest_aa, bands
+            )
+            kn_models[realization["noise_id"]] = (model, base_epochs, realization)
 
         if (counter + 1) % 50 == 0:
             logger.info(
@@ -369,15 +398,9 @@ def kn_windows_for_tier(kn_models, constants):
     start = time.time()
     for counter, (_kn_object_id, (model_6band, base_epochs, realization)) in enumerate(kn_models.items()):
         model_tier = {band: series for band, series in model_6band.items() if band in tier_bands}
-        # object_id de la KN = simulation_id_angle_index_explosion_offset_days_redshift (toda la
-        # realizacion; el z va incluido porque la grilla repite sim/angulo/offset a distintos z).
-        kn_id = (
-            f"{realization['simulation_id']}_{realization['angle_index']}_"
-            f"{realization['explosion_offset_days']:.4f}_{realization['redshift']:.4f}"
-        )
         noise_seed = KN_SEED_OFFSET + realization["noise_id"]
         window = build_window_from_model(
-            kn_id,
+            kn_object_id(realization),
             model_tier,
             constants,
             realization["redshift"],
@@ -426,6 +449,145 @@ def run_kn_tier(tier, kn_models, output_path):
         output_path,
     )
     return n_detected
+
+
+# ---------------------------------------------------------------------------
+# Ruta paralela: una simulacion LANL por tarea. El worker construye el modelo Y las ventanas de
+# todos los tiers en el mismo proceso, de modo que los modelos -- que no se necesitan despues --
+# nunca cruzan el limite de proceso ni se materializan todos a la vez. Solo vuelven las ventanas,
+# que son el producto final. El ruido va sembrado por realizacion (KN_SEED_OFFSET + noise_id), asi
+# que el resultado es identico al secuencial: el paralelismo no cambia ni un fotometro.
+# ---------------------------------------------------------------------------
+
+_KN_WORKER_STATE = {}
+
+
+def _kn_worker_initializer(simulation_time_grids, wavelength_rest_aa, lanl_spectra_path, tiers, bands):
+    _KN_WORKER_STATE["simulation_time_grids"] = simulation_time_grids
+    _KN_WORKER_STATE["wavelength_rest_aa"] = wavelength_rest_aa
+    _KN_WORKER_STATE["lanl_spectra_path"] = lanl_spectra_path
+    _KN_WORKER_STATE["tier_constants"] = {tier: build_tier_constants(tier) for tier in tiers}
+    _KN_WORKER_STATE["bands"] = bands
+
+
+def _kn_simulation_task(work_item):
+    """Una simulacion LANL -> {tier: DataFrame de ventanas} + detectadas por tier."""
+    simulation_id, realization_list = work_item
+    state = _KN_WORKER_STATE
+    simulation_spectra = load_simulation_spectra(simulation_id, state["lanl_spectra_path"])
+    tier_bands = {tier: set(constants["bands"]) for tier, constants in state["tier_constants"].items()}
+
+    windows = {tier: [] for tier in state["tier_constants"]}
+    for realization in realization_list:
+        model_6band, base_epochs = kn_model_from_spectra(
+            realization,
+            simulation_spectra,
+            state["simulation_time_grids"],
+            state["wavelength_rest_aa"],
+            state["bands"],
+        )
+        kn_id = kn_object_id(realization)
+        noise_seed = KN_SEED_OFFSET + realization["noise_id"]
+        for tier, constants in state["tier_constants"].items():
+            model_tier = {b: s for b, s in model_6band.items() if b in tier_bands[tier]}
+            window = build_window_from_model(
+                kn_id,
+                model_tier,
+                constants,
+                realization["redshift"],
+                KN_GENTYPE,
+                base_epochs=base_epochs,
+                noise_seed=noise_seed,
+            )
+            if window is not None:
+                windows[tier].append(window)
+
+    detected = {tier: len(tier_windows) for tier, tier_windows in windows.items()}
+    frames = {
+        tier: (pd.concat(tier_windows, ignore_index=True) if tier_windows else None)
+        for tier, tier_windows in windows.items()
+    }
+    return frames, detected, len(realization_list)
+
+
+def run_kn_tiers_parallel(
+    realizations,
+    simulation_time_grids,
+    wavelength_rest_aa,
+    lanl_spectra_path,
+    tiers,
+    output_paths,
+    workers,
+    bands=ALL_ROMAN_BANDS,
+):
+    """Genera las ventanas KN de todos los tiers repartiendo las simulaciones entre `workers`
+    procesos y escribe un parquet por tier. Devuelve {tier: kilonovas detectadas}.
+
+    Se usa imap ordenado sobre las simulaciones ordenadas (no imap_unordered) para que el orden de
+    filas del parquet sea reproducible entre corridas."""
+    by_simulation = realizations_by_simulation(realizations)
+    work_items = list(by_simulation.items())
+    # Cada worker es monohilo: 25 procesos x N hilos BLAS satura la maquina y frena todo. Con
+    # spawn los hijos heredan este environ e importan numpy ya con el limite puesto.
+    for variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(variable, "1")
+
+    logger.info(
+        "[kn] %d realizaciones sobre %d simulaciones, %d workers, tiers=%s",
+        len(realizations),
+        len(work_items),
+        workers,
+        ",".join(tiers),
+    )
+
+    frames_by_tier = {tier: [] for tier in tiers}
+    detected_by_tier = {tier: 0 for tier in tiers}
+    processed = 0
+    start = time.time()
+    context = multiprocessing.get_context("spawn")
+    with context.Pool(
+        workers,
+        initializer=_kn_worker_initializer,
+        initargs=(simulation_time_grids, wavelength_rest_aa, str(lanl_spectra_path), tuple(tiers), bands),
+    ) as pool:
+        for counter, (frames, detected, n_realizations) in enumerate(
+            pool.imap(_kn_simulation_task, work_items, chunksize=1), start=1
+        ):
+            processed += n_realizations
+            for tier in tiers:
+                detected_by_tier[tier] += detected[tier]
+                if frames[tier] is not None:
+                    frames_by_tier[tier].append(frames[tier])
+            if counter % 25 == 0 or counter == len(work_items):
+                elapsed = time.time() - start
+                rate = processed / elapsed if elapsed else 0.0
+                remaining = (len(realizations) - processed) / rate if rate else 0.0
+                logger.info(
+                    "[kn] %d/%d simulaciones  %d/%d KNe  detectadas=%s  %.0f KN/s  ETA %.0f min",
+                    counter,
+                    len(work_items),
+                    processed,
+                    len(realizations),
+                    " ".join(f"{tier}={detected_by_tier[tier]}" for tier in tiers),
+                    rate,
+                    remaining / 60.0,
+                )
+
+    for tier in tiers:
+        if not frames_by_tier[tier]:
+            logger.warning("[%s] ninguna kilonova alcanzo deteccion; no se escribe nada", tier)
+            continue
+        result = pd.concat(frames_by_tier[tier], ignore_index=True)
+        result.to_parquet(output_paths[tier], index=False)
+        logger.info(
+            "[%s] DONE kilonovas detectadas=%d skipped=%d rows=%d -> %s",
+            tier,
+            detected_by_tier[tier],
+            len(realizations) - detected_by_tier[tier],
+            len(result),
+            output_paths[tier],
+        )
+    return detected_by_tier
 
 
 def collect_object_records(catalog_path, limit=None):
