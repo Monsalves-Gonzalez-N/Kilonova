@@ -44,6 +44,29 @@ def test_build_window_is_reproducible(tier_constants):
     assert not first["mag_observed"].equals(different_seed["mag_observed"])
 
 
+def test_band_without_flux_stays_observed_as_upper_limit(tier_constants):
+    """A band the kilonova does not emit in (mag_true = +inf) is still observed by the cadence:
+    it yields a noise-only non-detection, never an unobserved gap. Dropping it instead leaves the
+    anchor band unobserved for kilonovas only -- a label-correlated artifact the model can latch
+    onto, since the OpenUniverse contaminants never produce it."""
+    bands = tier_constants["bands"]
+    anchor_band = tier_constants["anchor_band"]
+    model = bright_model(bands)
+    anchor_mjd, _ = model[anchor_band]
+    model[anchor_band] = (anchor_mjd, np.full(len(anchor_mjd), np.inf))
+
+    window = early_windows.build_window_from_model("123", model, tier_constants, 0.2, 10)
+
+    assert window is not None  # the other bands still detect the transient
+    anchor_rows = window[window["band"] == anchor_band]
+    assert anchor_rows["observed"].all()
+    assert not anchor_rows["detected"].any()
+    assert (anchor_rows["snr"] == 0.0).all()
+    assert anchor_rows["mag_err"].isna().all()  # 1.0857/snr is meaningless with no flux
+    assert np.isfinite(anchor_rows["mag_limit_5sigma"]).all()
+    assert np.isfinite(anchor_rows["mag_observed"]).all()
+
+
 def test_build_window_none_when_undetectable(tier_constants):
     faint = bright_model(tier_constants["bands"], magnitude=45.0)
     assert early_windows.build_window_from_model("123", faint, tier_constants, 0.2, 10) is None

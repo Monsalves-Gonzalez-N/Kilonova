@@ -3,8 +3,11 @@
 OpenUniverse transients already carry true per-band magnitudes in the snana hdf5, so they need no
 synthetic photometry. The LANL kilonova grid only stores rest-frame spectra (flux_rest), so the KN
 path must redshift + dim the spectrum and integrate it through the galsim.roman bandpasses to get an
-AB magnitude per band. That recipe — validated in kilonova_dataloader.ipynb — lives here so the
-pipeline (generate_early_windows.py) and the dataloader import it instead of each keeping a copy.
+AB magnitude per band. That recipe lives here so the pipeline (generate_early_windows.py) and the
+dataloader import it instead of each keeping a copy. It is pinned by tests/test_spectra.py against
+closed-form SEDs: a bolometric-conservation check and a flat-f_nu source whose AB magnitude is
+analytic in every band and at every redshift. (An earlier note claimed the recipe was validated in
+kilonova_dataloader.ipynb; that comparison did not catch the missing 1/(1+z), hence the tests.)
 
 The Roman bandpasses are reused from roman_photometry to keep one definition of the instrument.
 """
@@ -29,8 +32,14 @@ def redshift_and_dim_spectrum(
     cosmology=Planck18,
 ):
     """Rest-frame spectrum at 10 pc -> observed-frame spectrum at the luminosity distance of `redshift`.
-    No extinction: only the redshift (specutils) and the distance dimming (10 pc / d_L)^2. Returns
-    (wavelength_observed_aa, flux_observed_lambda, luminosity_distance_parsec)."""
+    No extinction: only the redshift (specutils) and the dimming (10 pc / d_L)^2 / (1 + z). Returns
+    (wavelength_observed_aa, flux_observed_lambda, luminosity_distance_parsec).
+
+    The 1/(1+z) is not optional and is easy to lose: specutils only stretches the wavelength axis,
+    it does not rescale the flux. Since dlambda_obs = (1+z) dlambda_rest, integrating f_lambda over
+    the stretched axis picks up an extra (1+z), so f_lambda itself must carry the inverse for the
+    observed bolometric flux to come out as L / (4 pi d_L^2). Photometrically this is the
+    K-correction term: dropping it makes every source 2.5 log10(1+z) too bright."""
     spectrum_rest = Spectrum(spectral_axis=wavelength_rest_aa * u.AA, flux=flux_rest_lambda * FLUX_UNIT)
     spectrum_observed = Spectrum(spectral_axis=spectrum_rest.spectral_axis, flux=spectrum_rest.flux)
     spectrum_observed.shift_spectrum_to(redshift=redshift)
@@ -41,14 +50,16 @@ def redshift_and_dim_spectrum(
         luminosity_distance_parsec = cosmology.luminosity_distance(redshift).to(u.pc).value
     else:
         luminosity_distance_parsec = intrinsic_distance_parsec
-    distance_dimming = (intrinsic_distance_parsec / luminosity_distance_parsec) ** 2
-    return wavelength_observed_aa, flux_observed_lambda * distance_dimming, luminosity_distance_parsec
+    dimming = (intrinsic_distance_parsec / luminosity_distance_parsec) ** 2 / (1.0 + redshift)
+    return wavelength_observed_aa, flux_observed_lambda * dimming, luminosity_distance_parsec
 
 
 def spectrum_to_roman_magnitudes(wavelength_observed_aa, flux_observed_lambda, bands=ALL_ROMAN_BANDS):
     """AB magnitude per band integrating the (already observed-frame) spectrum through the galsim.roman
-    bandpasses. NaN in a band the spectrum does not cover (e.g. the blue edge at high z). Expects the
-    spectrum already masked to flux > 0 (see magnitudes_for_bands for the masking convenience)."""
+    bandpasses. Two distinct non-numbers come out of this, and the pipeline treats them differently:
+    NaN means the spectrum does not cover the band (e.g. the blue edge at high z) and there is nothing
+    to say about it; +inf means the band is covered but carries no flux, which is a real measurement —
+    the survey observes it and gets a non-detection. Pass the spectrum with its zeros intact."""
     import galsim
 
     order = np.argsort(wavelength_observed_aa)
@@ -58,26 +69,35 @@ def spectrum_to_roman_magnitudes(wavelength_observed_aa, flux_observed_lambda, b
         flux_type="flambda",
     )
     magnitudes = {}
-    for band in bands:
-        bandpass = roman_bandpasses()[band]
-        covered = (
-            wavelength_observed_aa.min() <= bandpass.blue_limit * 10
-            and wavelength_observed_aa.max() >= bandpass.red_limit * 10
-        )
-        magnitudes[band] = (
-            float(spectral_energy_distribution.calculateMagnitude(bandpass)) if covered else np.nan
-        )
+    # A band with no flux integrates to zero and galsim takes its log10: that is the +inf above,
+    # not an error, so the warning is silenced rather than letting it flood the pipeline log.
+    with np.errstate(divide="ignore"):
+        for band in bands:
+            bandpass = roman_bandpasses()[band]
+            covered = (
+                wavelength_observed_aa.min() <= bandpass.blue_limit * 10
+                and wavelength_observed_aa.max() >= bandpass.red_limit * 10
+            )
+            magnitudes[band] = (
+                float(spectral_energy_distribution.calculateMagnitude(bandpass)) if covered else np.nan
+            )
     return magnitudes
 
 
 def magnitudes_for_bands(wavelength_rest_aa, flux_rest_lambda, redshift, bands=ALL_ROMAN_BANDS):
-    """Full KN SED -> AB mag in one call: mask flux > 0, redshift + dim, integrate through bandpasses.
+    """Full KN SED -> AB mag in one call: redshift + dim, then integrate through the bandpasses.
     The pipeline uses this; the dataloader instead splits it (redshift_and_dim_spectrum +
-    spectrum_to_roman_magnitudes) to also keep d_L and plot the observed spectrum."""
-    valid_mask = flux_rest_lambda > 0
+    spectrum_to_roman_magnitudes) to also keep d_L and plot the observed spectrum.
+
+    The zero-flux bins of the LANL Monte Carlo spectra are kept, not filtered out. Dropping them
+    used to leave a hole between the surviving samples that the linear interpolant spanned with a
+    straight line, so a single stray blue bin could invent flux right across a bandpass the
+    kilonova is dark in — and when no bin survived, the band was lost to the coverage check
+    instead of being reported as the non-detection it is."""
+    flux_rest_lambda = np.clip(np.asarray(flux_rest_lambda, dtype=float), 0.0, None)
     wavelength_observed_aa, flux_observed_lambda, _ = redshift_and_dim_spectrum(
-        wavelength_rest_aa[valid_mask],
-        flux_rest_lambda[valid_mask],
+        wavelength_rest_aa,
+        flux_rest_lambda,
         redshift,
     )
     return spectrum_to_roman_magnitudes(wavelength_observed_aa, flux_observed_lambda, bands=bands)

@@ -48,3 +48,31 @@ def test_shift_spectrum_to_redshift_stretches_wavelength():
     )
     assert observed_wavelength[0] == pytest.approx(6000.0)
     assert observed_wavelength[-1] == pytest.approx(18000.0)
+
+
+@pytest.mark.parametrize("redshift", [0.1, 0.5])
+def test_observed_spectrum_conserves_bolometric_flux_without_dust(redshift):
+    """Same invariant as tests/test_spectra.py for this module's own copy of the recipe: with the
+    dust switched off, the observed bolometric flux must be L / (4 pi d_L^2). shift_spectrum_to
+    only stretches the wavelength axis, so f_lambda needs an explicit 1/(1+z) on top of the
+    geometric dimming."""
+    intrinsic_distance_parsec = 10.0
+    rest_wavelength = np.linspace(1000.0, 20000.0, 500)
+    rest_flux = np.full_like(rest_wavelength, 1e-8)
+
+    result = extinction.generate_observed_kilonova_spectrum(
+        rest_wavelength,
+        rest_flux,
+        extinction_av_host=0.0,
+        extinction_rv_host=3.1,
+        redshift=redshift,
+        ebv_milky_way=0.0,
+        intrinsic_distance_parsec=intrinsic_distance_parsec,
+    )
+
+    distance_parsec = result["parameters"]["luminosity_distance_parsec"]
+    observed_luminosity = (
+        np.trapezoid(result["flux_observed"], result["wavelength_observed"]) * distance_parsec**2
+    )
+    rest_luminosity = np.trapezoid(rest_flux, rest_wavelength) * intrinsic_distance_parsec**2
+    assert observed_luminosity == pytest.approx(rest_luminosity, rel=1e-6)

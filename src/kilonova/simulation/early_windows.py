@@ -25,7 +25,7 @@ from kilonova.photometry.roman_noise import (
     source_flux_electrons,
 )
 
-# Receta de fotometria sintetica de kilonovas (SED LANL -> mag AB Roman), validada en el dataloader.
+# Receta de fotometria sintetica de kilonovas (SED LANL -> mag AB Roman), fijada por tests/test_spectra.py.
 from kilonova.photometry.spectra import ALL_ROMAN_BANDS, magnitudes_for_bands
 
 logger = logging.getLogger(__name__)
@@ -182,7 +182,9 @@ def build_window_from_model(
                 "epoch": epoch_index,
                 "days_since_detection": days_since_detection,
                 "band": band,
-                "observed": bool(observed and np.isfinite(mag_true)),
+                # mag_true infinita (banda sin flujo) sigue siendo observada: da una realizacion de
+                # solo ruido. Solo NaN -- que el modelo no cubra esa epoca -- deja la fila sin observar.
+                "observed": bool(observed and not np.isnan(mag_true)),
                 "mag_true": mag_true,
                 "mag_observed": np.nan,
                 "mag_err": np.nan,
@@ -195,7 +197,9 @@ def build_window_from_model(
                 snr = flux_true / flux_error
                 flux_observed = flux_true + noise_rng.normal(0.0, flux_error)
                 row["snr"] = snr
-                row["mag_err"] = 1.0857 / snr
+                # Sin flujo no hay error de magnitud que reportar (1.0857/0). Los OU nunca llegan
+                # aqui: con mag_true finita el flujo siempre es > 0.
+                row["mag_err"] = 1.0857 / snr if snr > 0 else np.nan
                 row["detected"] = bool(snr >= SNR_DETECTION)
                 row["mag_limit_5sigma"] = limiting_magnitude_5sigma(flux_error, exposure, zeropoint)
                 if flux_observed > 0:
@@ -319,9 +323,7 @@ def kn_object_id(realization):
     )
 
 
-def kn_model_from_spectra(
-    realization, simulation_spectra, simulation_time_grids, wavelength_rest_aa, bands
-):
+def kn_model_from_spectra(realization, simulation_spectra, simulation_time_grids, wavelength_rest_aa, bands):
     """Modelo verdadero de UNA realizacion (mag AB por banda en cada visita base) a partir de los
     espectros ya cargados de su simulacion. base_epochs = offset + 5*arange(N_KN_VISITS);
     rest_phase = base_epoch/(1+z). Tier-independiente: depende solo de (sim, angulo, offset, z)."""
@@ -341,12 +343,14 @@ def kn_model_from_spectra(
         for band in bands:
             magnitudes_by_band[band][epoch_position] = epoch_magnitudes[band]
 
+    # Se descarta NaN (no hay espectro para esa fase/angulo) pero se conserva +inf, que significa
+    # banda cubierta y sin flujo: es una medicion real, la de una no-deteccion.
     model = {}
     for band in bands:
         band_magnitudes = magnitudes_by_band[band]
-        finite = np.isfinite(band_magnitudes)
-        if finite.any():
-            model[band] = (base_epochs[finite], band_magnitudes[finite])
+        usable = ~np.isnan(band_magnitudes)
+        if usable.any():
+            model[band] = (base_epochs[usable], band_magnitudes[usable])
     return model, base_epochs
 
 

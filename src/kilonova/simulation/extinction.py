@@ -206,8 +206,12 @@ def generate_observed_kilonova_spectrum(
         else:
             luminosity_distance_parsec = intrinsic_distance_parsec
 
-    distance_dimming_factor = (intrinsic_distance_parsec / luminosity_distance_parsec) ** 2
-    flux_after_distance_dimming = flux_after_redshift_at_intrinsic_distance * distance_dimming_factor
+    # The 1/(1+z) rides along with the geometric dimming: shift_spectrum_to_redshift only stretches
+    # the wavelength axis, and dlambda_obs = (1+z) dlambda_rest, so f_lambda has to carry the
+    # inverse for the observed bolometric flux to be L / (4 pi d_L^2). Same recipe as
+    # kilonova.photometry.spectra.redshift_and_dim_spectrum.
+    dimming_factor = (intrinsic_distance_parsec / luminosity_distance_parsec) ** 2 / (1.0 + redshift)
+    flux_after_distance_dimming = flux_after_redshift_at_intrinsic_distance * dimming_factor
 
     extinction_av_milky_way = rv_milky_way * ebv_milky_way
     flux_after_milky_way_extinction = apply_dust_extinction_within_valid_range(

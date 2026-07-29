@@ -100,9 +100,7 @@ def main(argv=None):
         kn_models = early_windows.build_kn_models(
             realizations, simulation_time_grids, wavelength_rest_aa, lanl_spectra_path
         )
-        summary = {
-            tier: early_windows.run_kn_tier(tier, kn_models, output_paths[tier]) for tier in tiers
-        }
+        summary = {tier: early_windows.run_kn_tier(tier, kn_models, output_paths[tier]) for tier in tiers}
 
     for tier, n_detected in summary.items():
         print(f"{tier}: kilonovas with >=1 detection = {n_detected} / {len(realizations)}")
