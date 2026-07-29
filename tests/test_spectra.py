@@ -86,9 +86,25 @@ def test_band_without_flux_is_an_upper_limit_not_a_gap():
         wavelength_rest_aa, flux_rest_lambda, redshift=0.05, bands=["R062", "H158"]
     )
 
-    assert not np.isnan(magnitudes["R062"])  # covered by the spectrum, so it IS observable
-    assert magnitudes["R062"] > 40.0  # no flux at all -> fainter than any conceivable limit
+    assert np.isposinf(magnitudes["R062"])  # covered but dark: a non-detection, not missing data
     assert np.isfinite(magnitudes["H158"])  # the red band still carries the real photometry
+
+
+@pytest.mark.parametrize("flux_scale", [1.0, 1e-20, 1e-40])
+def test_covered_band_never_returns_nan_however_faint(flux_scale):
+    """NaN has to keep meaning "band not covered" alone. Integrating a bandpass the source is dark
+    in leaves the quadrature free to return an exact zero or a rounding-sized negative, and the
+    magnitude of a negative flux is NaN -- which would silently drop the band as if it had never
+    been observed. Scaling the source down walks it through both regimes."""
+    wavelength_rest_aa = np.geomspace(1000.0, 130000.0, 4000)
+    flux_rest_lambda = lanthanide_curtain_spectrum(wavelength_rest_aa) * flux_scale
+
+    magnitudes = magnitudes_for_bands(
+        wavelength_rest_aa, flux_rest_lambda, redshift=0.5, bands=["R062", "Z087", "H158"]
+    )
+
+    for band, magnitude in magnitudes.items():
+        assert not np.isnan(magnitude), f"{band} came back NaN despite being covered"
 
 
 def test_isolated_blue_bin_cannot_bridge_the_zero_gap():

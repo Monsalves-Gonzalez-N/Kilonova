@@ -69,18 +69,22 @@ def spectrum_to_roman_magnitudes(wavelength_observed_aa, flux_observed_lambda, b
         flux_type="flambda",
     )
     magnitudes = {}
-    # A band with no flux integrates to zero and galsim takes its log10: that is the +inf above,
-    # not an error, so the warning is silenced rather than letting it flood the pipeline log.
-    with np.errstate(divide="ignore"):
-        for band in bands:
-            bandpass = roman_bandpasses()[band]
-            covered = (
-                wavelength_observed_aa.min() <= bandpass.blue_limit * 10
-                and wavelength_observed_aa.max() >= bandpass.red_limit * 10
-            )
-            magnitudes[band] = (
-                float(spectral_energy_distribution.calculateMagnitude(bandpass)) if covered else np.nan
-            )
+    for band in bands:
+        bandpass = roman_bandpasses()[band]
+        covered = (
+            wavelength_observed_aa.min() <= bandpass.blue_limit * 10
+            and wavelength_observed_aa.max() >= bandpass.red_limit * 10
+        )
+        if not covered:
+            magnitudes[band] = np.nan
+            continue
+        # calculateMagnitude is calculateFlux followed by this same log, but it turns a band with
+        # no flux into a NaN indistinguishable from "not covered": the quadrature over an integrand
+        # that is zero across the bandpass returns either an exact 0 or a rounding-sized negative
+        # (order 1e-35), and log10 of those gives -inf and NaN respectively. Both mean the same
+        # physical thing, no flux, so both must come out as +inf.
+        band_flux = spectral_energy_distribution.calculateFlux(bandpass)
+        magnitudes[band] = float(-2.5 * np.log10(band_flux) + bandpass.zeropoint) if band_flux > 0 else np.inf
     return magnitudes
 
 
