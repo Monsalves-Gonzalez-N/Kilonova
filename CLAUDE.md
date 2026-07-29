@@ -16,6 +16,11 @@ this repository owns data simulation and datasets.
   - `photometry/roman_noise.py` — the noise recipe, single source of truth (CCD equation,
     Rose et al. 2025 eqs 8–10 + Table 3 NEA). galsim imported lazily.
   - `photometry/spectra.py` — LANL SED → Roman AB mags (redshift + dimming, no extinction).
+    Dimming is `(10pc/d_L)^2 / (1+z)`: specutils only stretches the wavelength axis, so f_lambda
+    carries the K-correction term itself. Magnitudes distinguish **NaN = band outside the spectral
+    coverage** from **+inf = band covered but with no flux**, which is a real non-detection the
+    survey observes (token `u`), never a gap — do not collapse the two. Pinned by
+    `tests/test_spectra.py` against closed-form SEDs.
   - `simulation/` — `lanl_cache` (grid → parquet), `extinction` (host+MW extinction photometry,
     STOP rules), `early_windows` (OpenUniverse contaminants + KN injection windows).
   - `datasets/openuniverse.py` — long DataFrame → transformer tokens (d/u/n types, [Z] regime).
