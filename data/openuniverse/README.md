@@ -85,18 +85,21 @@ z ∈ [0.02, 1.0] × 10 000 realizaciones = 1e6), 30 workers.
 
 | | deep | wide |
 |---|---|---|
-| KN con ≥1 detección / inyectadas | 155 268 → **721 776** / 1e6 | 95 650 → **590 917** / 1e6 |
+| KN con ≥1 detección / inyectadas | 155 268 → **721 773** / 1e6 | 95 650 → **590 914** / 1e6 |
 | z máximo con detección | 0.2411 → **1.000** (borde de la grilla) | 0.1561 → **1.000** |
 | z50% (mitad de la grilla detectada) | — → **0.387** | — → **0.241** |
 | z5% | — → **>1.0** | — → **0.729** |
-| filas | — → 14 435 510 | — → 11 818 340 |
+| filas | — → 14 435 450 | — → 11 818 280 |
 
 La grilla ahora se satura por arriba: queda 7.0% (deep) y 0.9% (wide) de detección en el último
 nodo, z=1. Si se quiere el z5% de deep hay que extender `redshift_max`.
 
-Chequeos de sanidad sobre los ficheros nuevos: **0** filas de banda ancla R062 con
-`observed=False` en ambos tiers, **0** `NaN` en `mag_true`, y los `+inf` presentes (42 deep,
-3 246 wide) son no-detecciones reales según la convención de abajo.
+Chequeos de sanidad sobre los ficheros nuevos: **0** filas de banda ancla con `observed=False`
+(ojo, la ancla es **Z087 en deep y R062 en wide**, `roman_noise.py: TIER_ANCHOR_BAND` — comprobar
+deep contra R062 da 0 pero es vacío, esa banda no existe en ese tier), **0** `NaN` en `mag_true`, y
+los `+inf` presentes (42 deep, 3 246 wide) son no-detecciones reales según la convención de abajo.
+Las bandas no-ancla salen con `observed=False` en el 50.0% exacto de sus filas, que es la cadencia
+por diseño: la ancla en todas las visitas, el resto en visitas alternas (`cadence_schedule`).
 
 Contra Chase et al. (z50%=0.29, z5%=0.96, métrica más laxa): **wide** queda por debajo en ambos
 percentiles, como se esperaba. **deep** los supera —su z5% pasa de 1.0— coherente con que el
@@ -147,11 +150,27 @@ la dirección correcta al quitar el flujo inventado.
 
 ## Pendiente conocido
 
-`object_id` no es estrictamente único en `kn_windows_*.parquet`: la clave se construye como
-`sim_angle_?_z` con los valores redondeados a 4 decimales, y en la corrida del 2026-07-30 hay 3
-objetos de deep con 40 filas en vez de 20 (dos realizaciones distintas colisionando en la misma
-cadena). Son 3 de 721 776, pero cualquier `groupby('object_id')` aguas abajo fusiona dos curvas de
-luz en una. (Aparte hay objetos con menos de 20 filas: ventana más corta, eso es legítimo.)
+**`kn_object_id` no es único por construcción** (`early_windows.py:317`): es
+`{sim}_{angle}_{offset:.4f}_{z:.4f}` y deja fuera el `noise_id`, que es el único campo único de la
+realización. Dos realizaciones colisionan si coinciden sim, ángulo y nodo de z y sus offsets
+redondean igual a 4 decimales. Con 10 000 realizaciones por nodo, 900×54 = 48 600 celdas
+(sim, ángulo) y 5×10⁴ cajones de offset, salen **~2 colisiones esperadas por millón** — en la
+corrida del 2026-07-30 hubo **3, las mismas en los dos tiers** (el set de realizaciones se comparte
+entre tiers). No es un fallo de lógica, es el cumpleaños esperado de esa clave.
+
+Los dos comportamientos posibles no son iguales: el camino paralelo (`_kn_simulation_task`) escribe
+las dos ventanas, así que se ven como un objeto de 40 filas; el secuencial (`build_kn_models`)
+acumula en un dict indexado por el id y **se comería una en silencio**.
+
+En los ficheros vigentes **ya no hay duplicados**: el 2026-07-30 se borró el segundo bloque de cada
+par (60 filas por tier, se conservó el primero), de ahí que las cuentas de arriba sean 721 773 y
+590 914 y no las 721 776 / 590 917 que dice el log de la corrida. Fue una edición quirúrgica sobre
+el parquet, **no** una regeneración: volver a correr `kn-kilonova-windows` con la misma semilla
+reproduce los duplicados. El arreglo de raíz —meter `noise_id` en `kn_object_id`— sigue pendiente.
+
+(Aparte hay 2 objetos de deep con 15 filas en vez de 20: `N_KN_VISITS = 8` y la ventana es primera
+detección + 4 épocas, así que si la detección cae en la visita 6 no quedan 4 épocas detrás. Eso es
+legítimo, no un duplicado.)
 
 **`training/openuniverse_data.py` se queda sin clase KN**: consume los
 `kilonova_windows_{deep,wide}.hdf5` que se borraron el 2026-07-30, y **no** lee
