@@ -1,6 +1,5 @@
 outs:
-- md5: e1e5b9e18f861e385d4a2d8793f52b89
-  size: 10963376284
-  isexec: true
+- md5: 76f75568a0729f7b7ce3db55a44e16f0
+  size: 10963401855
   hash: md5
   path: lanl_spectra.parquet

@@ -1,0 +1,68 @@
+schema: '2.0'
+stages:
+  early_windows:
+    cmd: kn-run-openuniverse --output-dir data/openuniverse
+    deps:
+    - path: data/dust_generation/lanl_spectra.parquet
+      hash: md5
+      md5: 76f75568a0729f7b7ce3db55a44e16f0
+      size: 10963401855
+    - path: src/kilonova/photometry/roman_noise.py
+      hash: md5
+      md5: f7b10c7aae448b6b42388df87f893c5d
+      size: 11567
+    - path: src/kilonova/photometry/spectra.py
+      hash: md5
+      md5: 4fb42a62ec0cb0211734e4f282f02922
+      size: 6171
+    - path: src/kilonova/simulation/early_windows.py
+      hash: md5
+      md5: ac308fa864036344fc7a072794fa468b
+      size: 30869
+    outs:
+    - path: data/openuniverse/early_windows_deep.parquet
+      hash: md5
+      md5: 6890271338be52bce019d1ac8ae66267
+      size: 480950581
+    - path: data/openuniverse/early_windows_wide.parquet
+      hash: md5
+      md5: 1f191f5b87a7cd4413e854643e9baf7a
+      size: 392159086
+  kilonova_windows:
+    cmd: kn-kilonova-windows --output-dir data/openuniverse --redshift-min 0.02 
+      --redshift-max 1.0 --n-redshift 100 --redshift-spacing log 
+      --realizations-per-redshift 10000
+    deps:
+    - path: data/dust_generation/lanl_spectra.parquet
+      hash: md5
+      md5: 76f75568a0729f7b7ce3db55a44e16f0
+      size: 10963401855
+    - path: src/kilonova/photometry/roman_noise.py
+      hash: md5
+      md5: f7b10c7aae448b6b42388df87f893c5d
+      size: 11567
+    - path: src/kilonova/photometry/spectra.py
+      hash: md5
+      md5: 4fb42a62ec0cb0211734e4f282f02922
+      size: 6171
+    - path: src/kilonova/simulation/early_windows.py
+      hash: md5
+      md5: ac308fa864036344fc7a072794fa468b
+      size: 30869
+    params:
+      params.yaml:
+        kilonova_windows:
+          redshift_min: 0.02
+          redshift_max: 1.0
+          n_redshift: 100
+          redshift_spacing: log
+          realizations_per_redshift: 10000
+    outs:
+    - path: data/openuniverse/kn_windows_deep.parquet
+      hash: md5
+      md5: f5d2a3530e6cb08eb7dee578730589f4
+      size: 460323988
+    - path: data/openuniverse/kn_windows_wide.parquet
+      hash: md5
+      md5: e15039c2593e0c1a696f279c82834728
+      size: 397000718
