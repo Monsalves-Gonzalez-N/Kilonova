@@ -1,4 +1,11 @@
 [core]
-    remote = elements
+    remote = t7
+# El T7 es el remote de trabajo desde 2026-07-30. La url de aqui es la ruta del Mac; en Linux el
+# mismo disco monta en /media/nicolas/T7, asi que esa maquina la sobreescribe en .dvc/config.local
+# (gitignored), que es donde va todo lo que depende de la maquina.
+['remote "t7"']
+    url = /Volumes/T7/dvc-kilonova
+# Remote anterior. Se conserva porque es el unico sitio donde siguen los kilonova_windows_*.hdf5
+# borrados en la limpieza del 2026-07-30 (sus .dvc siguen commiteados).
 ['remote "elements"']
     url = /Volumes/Elements/dvc-kilonova

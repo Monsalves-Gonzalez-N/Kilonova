@@ -44,8 +44,13 @@ this repository owns data simulation and datasets.
 - `configs/paths.yaml` — ALL data locations; override with `KN_<FIELD>` env vars or CLI flags.
   Never hardcode paths in code or notebooks; use `kilonova.config.load_paths()`.
 - `notebooks/` — import from the package, never `sys.path` hacks.
-- Big data: DVC (`dvc pull`; remote on `/Volumes/Elements/dvc-kilonova`). OpenUniverse source
-  hdf5s live on `/Volumes/T7/openuniverse2025`.
+- Big data: DVC (`dvc pull`). The working remote is the **T7** — `/Volumes/T7/dvc-kilonova` on the
+  Mac, `/media/nicolas/T7/dvc-kilonova` on Linux, overridden per machine in `.dvc/config.local`
+  (gitignored: never put a mount path in the tracked `.dvc/config`). The old `elements` remote is
+  kept defined because it is the only place the `kilonova_windows_*.hdf5` deleted on 2026-07-30
+  still exist. The T7 is **exFAT**: it works as a remote (DVC copies) but cannot hold a DVC cache
+  with hardlinks, and it has no POSIX permissions. OpenUniverse source hdf5s live on the same disk,
+  `/Volumes/T7/openuniverse2025` (`/media/nicolas/T7/...` on Linux).
 - `data/openuniverse/README.md` says which file of that directory is the live one. The rule there:
   **the clean name is current; any suffix after the extension** (`.stale-cadence`,
   `.buggy-photometry`, `.stale-<date>`) **is a superseded generation kept only for comparison** —
