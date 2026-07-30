@@ -9,7 +9,13 @@ import numpy as np
 import pytest
 
 from kilonova.photometry.spectra import magnitudes_for_bands
-from kilonova.simulation.lanl_cache import build_schema, isotropic_equivalent_flux
+
+# lanl_cache pulls in ray, and through simulation.extinction also pyphot and dustmaps, none of which
+# the slim CI env installs -- import the module the same way test_extinction.py does so a missing sim
+# extra skips this file instead of failing collection.
+lanl_cache = pytest.importorskip(
+    "kilonova.simulation.lanl_cache", reason="needs pyphot/ray/dustmaps (sim extras)"
+)
 
 pytest.importorskip("galsim")
 
@@ -21,7 +27,7 @@ LANL_TO_ROMAN = [("z-band", "Z087"), ("J-band", "J129"), ("H-band", "H158")]
 
 def test_isotropic_equivalent_scales_by_the_number_of_angular_bins():
     flux = np.ones((3, 5, 54), dtype=np.float32)
-    converted = isotropic_equivalent_flux(flux)
+    converted = lanl_cache.isotropic_equivalent_flux(flux)
     assert converted.shape == flux.shape
     assert np.allclose(converted, 54.0)
 
@@ -29,13 +35,13 @@ def test_isotropic_equivalent_scales_by_the_number_of_angular_bins():
 def test_isotropic_equivalent_reads_the_bin_count_from_the_data():
     """The factor is 4 pi / dOmega_bin, so it has to follow the file's own binning, not a
     hardcoded 54 -- a grid with a different number of angles must scale by that number."""
-    assert np.allclose(isotropic_equivalent_flux(np.ones((2, 4, 18))), 18.0)
+    assert np.allclose(lanl_cache.isotropic_equivalent_flux(np.ones((2, 4, 18))), 18.0)
 
 
 def test_schema_records_the_flux_convention():
     """The cached parquet is not a verbatim copy of the .dat column, so it must say so: a reader
     that applied the factor a second time would be 4.33 mag out."""
-    metadata = build_schema(np.linspace(1000.0, 128000.0, 1024)).metadata
+    metadata = lanl_cache.build_schema(np.linspace(1000.0, 128000.0, 1024)).metadata
     assert b"isotropic-equivalent" in metadata[b"flux_convention"]
     assert b"n_angles" in metadata[b"flux_angular_scaling"]
 
@@ -76,7 +82,7 @@ def test_cached_flux_reproduces_the_published_lanl_magnitudes(lanl_grid_dir):
         pytest.skip(f"{spectra_path.name} not in the mounted grid")
 
     times, wavelength_aa, flux_per_bin = _read_spectra(spectra_path)
-    flux = isotropic_equivalent_flux(flux_per_bin)
+    flux = lanl_cache.isotropic_equivalent_flux(flux_per_bin)
     published = _read_mag_blocks(magnitudes_path)
 
     residuals = []
