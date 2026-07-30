@@ -2,4 +2,5 @@
 kn-cache-lanl = kilonova.cli.cache_lanl:main
 kn-early-windows = kilonova.cli.early_windows:main
 kn-extinguish = kilonova.cli.extinguish:main
+kn-kilonova-windows = kilonova.cli.kilonova_windows:main
 kn-run-openuniverse = kilonova.cli.run_all_openuniverse:main

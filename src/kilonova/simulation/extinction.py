@@ -248,6 +248,11 @@ def _read_header_times(filepath):
 
 
 def parse_spec(filepath):
+    """Raw reader for a *_spec_*.dat file. Returns (times, lam_AA, flux) with the flux exactly as
+    written: **per angular bin**, which is NOT what an observer measures. Multiply by n_angles
+    (lanl_cache.isotropic_equivalent_flux) before doing photometry with it, or every magnitude
+    comes out 4.33 mag too faint. The pipeline does not use this — it reads lanl_spectra.parquet,
+    where the conversion is already applied."""
     times, spectra, current = [], [], []
     with open(filepath) as f:
         for line in f:

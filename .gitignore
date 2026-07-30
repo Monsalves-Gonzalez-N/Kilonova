@@ -42,6 +42,15 @@ data/openuniverse/*.hdf5
 data/openuniverse/*.parquet
 data/openuniverse/*.fits
 data/openuniverse/*.fits.gz
+# Generaciones superadas: el nombre limpio es el vigente, el sufijo marca lo obsoleto
+# (.stale-cadence, .buggy-photometry, .stale-<fecha>). Ver data/openuniverse/README.md.
+data/openuniverse/*.parquet.*
+data/openuniverse/*.hdf5.*
+!data/openuniverse/*.hdf5.dvc
+data/openuniverse/*.npz.*
+data/openuniverse/normalization.json.stale-*
+# Cache de tokens completa (~800 MB): derivada, la reconstruye training/openuniverse_data.py
+data/openuniverse/openuniverse_tokens.npz
 
 # Generated figure PDFs, reference papers and local caches
 data/openuniverse/*.pdf

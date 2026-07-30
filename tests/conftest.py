@@ -1,10 +1,29 @@
-"""Tiny synthetic fixtures mirroring the pipeline schemas — no real data files."""
+"""Tiny synthetic fixtures mirroring the pipeline schemas — no real data files.
+
+The one exception is `lanl_grid_dir`, which points at the raw LANL grid when it happens to be
+mounted: the flux normalization can only be pinned against the magnitudes LANL ships with it.
+"""
+
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
 BANDS_DEEP = ["Z087", "Y106", "J129", "H158", "F184"]
+
+
+@pytest.fixture
+def lanl_grid_dir():
+    """Raw kn_sim_cube_v1 grid, skipping the test when it is not mounted (CI, or the Mac with the
+    Elements drive unplugged). Resolved through the same config as the pipeline."""
+    from kilonova.config import load_paths
+
+    candidates = [load_paths().lanl_grid_dir, "data/dust_generation/kn_sim_cube_v1"]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_dir():
+            return Path(candidate)
+    pytest.skip("raw LANL grid not mounted (see configs/paths.yaml: lanl_grid_dir)")
 
 
 @pytest.fixture

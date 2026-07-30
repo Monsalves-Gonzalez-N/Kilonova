@@ -1,6 +1,9 @@
 # Pipeline stages (dvc repro). The producer of the dvc-added lanl_spectra.parquet is
 # kn-cache-lanl; it is not a stage here because its raw input (kn_sim_cube_v1, on the
 # Elements drive) is not always mounted — regenerate manually and `dvc add` the result.
+# That cache is not a verbatim copy of the .dat grid: it carries the isotropic-equivalent
+# angular factor (x54, see lanl_cache.isotropic_equivalent_flux), so a rebuild from an older
+# checkout of that module silently makes every kilonova 4.33 mag too faint.
 # kn-run-openuniverse likewise reads the OpenUniverse source from /Volumes/T7 (see
 # configs/paths.yaml); mount it before running dvc repro.
 
@@ -33,3 +36,27 @@ stages:
     outs:
       - data/openuniverse/early_windows_deep.parquet
       - data/openuniverse/early_windows_wide.parquet
+
+  # La clase KN. No comparte etapa con early_windows: los contaminantes salen del snana de
+  # OpenUniverse (magnitudes ya calculadas) y esta etapa sintetiza la fotometria desde los
+  # espectros LANL en reposo, asi que solo esta depende de photometry/spectra.py.
+  # --workers no va en el cmd: es una decision de la maquina, no del dataset.
+  kilonova_windows:
+    cmd: >-
+      kn-kilonova-windows
+      --output-dir data/openuniverse
+      --redshift-min ${kilonova_windows.redshift_min}
+      --redshift-max ${kilonova_windows.redshift_max}
+      --n-redshift ${kilonova_windows.n_redshift}
+      --redshift-spacing ${kilonova_windows.redshift_spacing}
+      --realizations-per-redshift ${kilonova_windows.realizations_per_redshift}
+    params:
+      - kilonova_windows
+    deps:
+      - data/dust_generation/lanl_spectra.parquet
+      - src/kilonova/simulation/early_windows.py
+      - src/kilonova/photometry/roman_noise.py
+      - src/kilonova/photometry/spectra.py
+    outs:
+      - data/openuniverse/kn_windows_deep.parquet
+      - data/openuniverse/kn_windows_wide.parquet

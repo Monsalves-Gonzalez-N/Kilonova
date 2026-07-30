@@ -3,3 +3,16 @@ extinguish:
   redshift_min: 0.003
   redshift_max: 1.0
   n_redshift: 50
+
+# Grilla con la que se generaron los kn_windows_*.parquet vigentes (2026-07-30).
+# 100 nodos x 10000 realizaciones = 1e6. Con el factor angular aplicado hay detecciones en TODOS
+# los nodos, incluido z=1 (7.0% deep, 0.9% wide), asi que la grilla se satura por arriba: para
+# medir el z5% de deep hay que subir redshift_max. El techo real de diversidad no es este numero
+# sino las 900 simulaciones LANL x 54 angulos = 48600 SEDs distintas, asi que cada SED se repite
+# ~20 veces.
+kilonova_windows:
+  redshift_min: 0.02
+  redshift_max: 1.0
+  n_redshift: 100
+  redshift_spacing: log
+  realizations_per_redshift: 10000

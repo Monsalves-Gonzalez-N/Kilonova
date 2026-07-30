@@ -5,6 +5,11 @@ FixedSizeList<float32, 1024>; the shared wavelength grid is written once to the
 parquet schema metadata as raw float32 bytes (key ``wavelength_rest_aa``).
 Parallelized with Ray: one remote task per .dat file.
 
+``flux_rest`` is the isotropic-equivalent flux an observer in that angular bin measures, which
+is the raw .dat column times the number of angular bins -- see ``isotropic_equivalent_flux``.
+The schema metadata records this under ``flux_convention``; do not apply the factor again
+downstream.
+
 Read back the wavelength grid with::
 
     table = pyarrow.parquet.read_table('lanl_spectra.parquet')
@@ -54,18 +59,43 @@ def build_schema(wavelength_grid_aa):
             b"wavelength_rest_dtype": b"float32",
             b"wavelength_unit": b"angstrom",
             b"flux_unit": b"erg s-1 cm-2 angstrom-1",
+            # flux_rest is NOT a verbatim copy of the .dat column: it carries the
+            # isotropic-equivalent conversion (see isotropic_equivalent_flux). Consumers must not
+            # apply it a second time.
+            b"flux_convention": b"isotropic-equivalent at 10 pc, observer in the angular bin",
+            b"flux_angular_scaling": b"raw per-bin flux multiplied by n_angles (4 pi / dOmega_bin)",
         }
     )
 
 
+def isotropic_equivalent_flux(flux_per_angular_bin):
+    """Per-angular-bin flux -> what an observer in that direction actually measures.
+
+    The .dat spectra hold the flux carried by each angular bin, not the isotropic equivalent.
+    An observer sitting in bin k sees a source whose apparent luminosity is the bin's flux
+    spread over the full sphere, so the conversion is 4 pi / dOmega_bin; the bins are uniform in
+    cos(theta), all of them subtending 4 pi / n_angles, which leaves a plain factor of n_angles
+    (54 for this grid, 4.331 mag).
+
+    Skipping it makes every synthetic kilonova 4.33 mag too faint, which is not subtle: it drops
+    the redshift reach from z ~ 1 to z ~ 0.24. Pinned by tests/test_lanl_cache.py against the
+    AB magnitudes LANL publishes alongside the spectra in the *_mags_* files -- their bolometric
+    *_lums_* block matches the raw per-bin spectrum exactly, while their per-band block and their
+    magnitudes are the isotropic-equivalent ones, and the two differ by exactly this factor.
+    """
+    n_angles = flux_per_angular_bin.shape[-1]
+    return flux_per_angular_bin * n_angles
+
+
 def parse_spec_fast(filepath, n_times):
-    """Fast numpy text parser. Returns (lam_aa[N_WAVELENGTHS], flux[n_times, n_wave, n_angles])."""
+    """Fast numpy text parser. Returns (lam_aa[N_WAVELENGTHS], flux[n_times, n_wave, n_angles]),
+    the flux already converted to the isotropic equivalent an observer would measure."""
     data = np.loadtxt(filepath, comments="#", dtype=np.float32)
     n_wavelengths = data.shape[0] // n_times
     data = data.reshape(n_times, n_wavelengths, -1)
     lam_aa = (0.5 * (data[0, :, 0] + data[0, :, 1]) * CM_TO_ANG).astype(np.float32)
     flux = data[:, :, 2:]  # (n_times, n_wavelengths, n_angles)
-    return lam_aa, flux
+    return lam_aa, isotropic_equivalent_flux(flux)
 
 
 def _dict_string_column(value, n_rows):
