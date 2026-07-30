@@ -17,21 +17,32 @@ K-corrección y todo lo demás incorporado; este pipeline solo les aplica la rec
 ventana. Por eso **ningún fix de la fotometría sintética los toca** — esa fotometría existe
 únicamente en el camino de las KN, que parten de espectros LANL en reposo.
 
-## Superado (sufijo = no usar)
+## Superado — **borrado el 2026-07-30** (30 GB)
 
-| archivo | por qué quedó obsoleto |
+La regla del sufijo sigue en pie para lo que venga, pero de estas generaciones ya no queda copia
+local: sus resultados están en las tablas de más abajo, que es lo único que hacía falta conservar.
+
+| archivo borrado | por qué quedó obsoleto |
 |---|---|
 | `early_windows_{deep,wide}.parquet.stale-cadence` | cadencia incorrecta; corregido en la corrida del 2026-07-28 |
 | `kn_windows_{deep,wide}.parquet.buggy-photometry` | los tres bugs de fotometría de abajo (2026-07-29) |
 | `kn_windows_{deep,wide}.parquet.missing-angular-factor` | esos tres corregidos, pero sin el factor angular 54 (2026-07-30) |
-| `openuniverse_tokens.npz.stale-2026-06-30` | caché de tokens anterior a ambas regeneraciones |
-| `openuniverse_tokens_test.npz.stale-2026-07-24` | ídem |
+| `openuniverse_tokens{,_test}.npz.stale-*` | caché de tokens anterior a las regeneraciones |
 | `normalization.json.stale-2026-07-24` | normalización de magnitud ajustada sobre los tokens viejos |
+| `kilonova_windows_{deep,wide}.hdf5` | clase KN de junio, con los tres bugs y sin factor angular |
 
-Los `.npz` son **caché derivada**, no fuente: `training/openuniverse_data.py` los reconstruye solo
-si el archivo no existe. Por eso se renombraron en vez de regenerarse — basta con que el nombre
-que busca el código no esté para que se rehaga desde las fuentes actuales. `normalization.json` se
-reajusta en el mismo paso.
+Los `.npz` eran **caché derivada**, no fuente: `training/openuniverse_data.py` los reconstruye
+cuando el fichero no existe, y `normalization.json` se reajusta en el mismo paso. Los `.hdf5` sí
+eran fuente para el training y estaban en DVC: sus `.dvc` **siguen commiteados**, así que un
+`dvc pull` los recupera desde el remote del Elements (Mac) — desde esta máquina el remote no es
+alcanzable, así que si esa copia no existe, no existen.
+
+Fuera de este directorio se borraron en la misma pasada
+`data/dust_generation/lanl_extinguished_photometry.parquet` (17 GB) y
+`lanl_extinguished_spectra_test.parquet`, obsoletos por el bug del `1/(1+z)` **y** por el factor
+angular (hay que rehacerlos con `kn-extinguish`), y `lanl_spectra.parquet.per-angular-bin` (11 GB),
+la versión previa del caché: reproducible con `kn-cache-lanl` sobre `kn_sim_cube_v1` desde un
+checkout anterior a `c696ed0`.
 
 ## El bug grande: el factor angular 54 (4.331 mag)
 
@@ -135,14 +146,16 @@ objetos de deep con 40 filas en vez de 20 (dos realizaciones distintas colisiona
 cadena). Son 3 de 721 776, pero cualquier `groupby('object_id')` aguas abajo fusiona dos curvas de
 luz en una. (Aparte hay objetos con menos de 20 filas: ventana más corta, eso es legítimo.)
 
-`training/openuniverse_data.py` consume la clase KN desde `kilonova_windows_{deep,wide}.hdf5`
-(2026-06-29, fotometría con los tres bugs, rastreados por DVC), **no** desde
-`kn_windows_*.parquet`. Mientras no exista un conversor parquet→hdf5 o el dataloader no lea el
-parquet, el entrenamiento sigue viendo las KN viejas aunque este directorio ya tenga las buenas.
+**`training/openuniverse_data.py` se queda sin clase KN**: consume los
+`kilonova_windows_{deep,wide}.hdf5` que se borraron el 2026-07-30, y **no** lee
+`kn_windows_*.parquet`. Hasta que exista un conversor parquet→hdf5 o el dataloader aprenda a leer
+el parquet, el training no arranca en esta máquina — que es preferible a que arranque en silencio
+sobre las KN con los tres bugs, como venía pasando.
 
-`src/kilonova/simulation/extinction.py` también llevaba el bug 1 y ya está corregido, pero nada
-de lo derivado de `kn-extinguish` se ha regenerado. Además, el factor angular cambió
-`lanl_spectra.parquet` (el anterior quedó como `.per-angular-bin`), así que
-`data/dust_generation/lanl_extinguished_photometry.parquet` y
-`lanl_extinguished_spectra_test.parquet` están obsoletos: 4.33 mag débiles. La etapa `extinguish`
-de `dvc.yaml` lo detecta sola porque `lanl_spectra.parquet` es una de sus `deps`.
+`dvc add` del nuevo `lanl_spectra.parquet`: el `.dvc` commiteado sigue apuntando al hash de la
+versión por bin angular. Pendiente de hacer en el Mac, que es donde el remote (`/Volumes/Elements`)
+es alcanzable.
+
+`src/kilonova/simulation/extinction.py` también llevaba el bug 1 y ya está corregido, pero nada de
+lo derivado de `kn-extinguish` se ha regenerado y sus dos salidas están borradas. La etapa
+`extinguish` de `dvc.yaml` lo detecta sola porque `lanl_spectra.parquet` es una de sus `deps`.
