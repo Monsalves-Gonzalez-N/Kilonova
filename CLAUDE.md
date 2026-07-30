@@ -30,8 +30,17 @@ this repository owns data simulation and datasets.
     **never apply it a second time downstream.** Pinned by `tests/test_lanl_cache.py` against the
     AB magnitudes LANL ships in the `*_mags_*` files. Omitting it made every kilonova 4.33 mag too
     faint and cut the redshift reach from z~1 to z~0.24.
+    The KN visit grid is rebuilt per object from the merger (`offset + 5*arange`), unlike the
+    contaminants, which sit on the survey's own visit sequence. The band pattern repeats every
+    **two** visits, so such a grid needs BOTH the sub-period delay (`explosion_offset_days`) and a
+    **`cadence_parity` drawn independently** — otherwise visit 0 is always even, and since a
+    kilonova is fast and detected right there, the cadence phase gets printed onto the label. It
+    did: 92% of KN vs 29% of contaminants on even phase, so the observation mask ALONE classified
+    at 80.7% (baseline 54.9%). Any new synthetic-cadence path must draw that parity; pinned by
+    `test_cadence_parity_selects_the_band_pair_of_the_first_epoch`.
   - `datasets/openuniverse.py` — long DataFrame → transformer tokens (d/u/n types, [Z] regime).
-  - `cli/` — `kn-cache-lanl`, `kn-extinguish`, `kn-early-windows`, `kn-run-openuniverse`.
+  - `cli/` — `kn-cache-lanl`, `kn-extinguish`, `kn-early-windows`, `kn-kilonova-windows`,
+    `kn-run-openuniverse`.
 - `configs/paths.yaml` — ALL data locations; override with `KN_<FIELD>` env vars or CLI flags.
   Never hardcode paths in code or notebooks; use `kilonova.config.load_paths()`.
 - `notebooks/` — import from the package, never `sys.path` hacks.

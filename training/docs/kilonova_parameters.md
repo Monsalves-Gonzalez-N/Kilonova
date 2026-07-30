@@ -24,14 +24,16 @@ por realización.
 
 Estos vienen de `kn_windows_{deep,wide}.parquet` (uno por objeto/ventana muestreada). En el parquet
 no son columnas propias: van codificados en el `object_id`,
-`{simulation_id}_{angle_index}_{explosion_offset:.4f}_{z:.4f}`:
+`{simulation_id}_{angle_index}_{explosion_offset:.4f}_{z:.4f}_{cadence_parity}_{noise_id}`:
 
 | parámetro                | descripción                                              |
 |----------------------------|-----------------------------------------------------------|
-| `simulation_id`            | referencia a la simulación física (tabla de arriba)       |
+| `simulation_id`            | referencia a la simulación física (tabla de arriba); va primero porque el split anti-fuga lo lee de ahí |
 | `angle_index`              | ángulo de observación usado en esta realización           |
 | `explosion_offset_days`    | offset temporal de la explosión respecto al muestreo       |
 | `redshift`                 | corrimiento al rojo cosmológico aplicado                   |
+| `cadence_parity`           | paridad de la primera visita: el otro grado de libertad de la fase del merger en el ciclo de 10 d de la cadencia |
+| `noise_id`                 | id de la realización; hace el `object_id` único por construcción |
 | `n_detected`                | número de épocas detectadas en la ventana                 |
 | `gentype`                   | código de tipo generativo (50 = KN)                        |
 

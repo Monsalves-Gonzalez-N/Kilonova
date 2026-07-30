@@ -40,6 +40,15 @@ N_ANGLE_BINS = 54
 KN_REALIZATION_SEED = 0  # reproducibilidad del sorteo simulacion/angulo/offset
 N_KN_VISITS = 8  # visitas sinteticas (margen para hallar 1a deteccion + 4 epocas)
 EXPLOSION_OFFSET_MAX_DAYS = 5.0  # t0 ~ U[0, max]: dias observador entre el merger y la 1a visita
+# La cadencia se repite cada 2 visitas (par: ancla + las dos no-ancla azules; impar: ancla + las dos
+# rojas), asi que la fase del merger dentro del ciclo tiene DOS grados de libertad: el retardo hasta
+# la 1a visita (explosion_offset_days) y la PARIDAD de esa visita. La grilla KN se construye como
+# offset + 5*arange(N), de modo que su indice 0 es siempre la 1a visita post-merger; sin sortear la
+# paridad aparte, esa visita seria siempre par. Como la KN es rapida y casi siempre se detecta ahi,
+# eso imprimia la fase de la cadencia en la clase KN (92% par vs 29% en los contaminantes: la
+# mascara sola clasificaba al 80.7%). En un survey real la grilla es fija en tiempo absoluto y el
+# merger cae uniforme en el ciclo de 10 d, o sea paridad 50/50 e independiente del retardo.
+CADENCE_PARITY_PERIOD = 2  # visitas por ciclo del patron de bandas
 KN_GENTYPE = 50
 # Offset para la semilla de ruido de las KN: se siembra con KN_SEED_OFFSET + noise_id de la
 # realizacion, disjunto de los ids OU (~8e7).
@@ -87,15 +96,24 @@ def model_from_hdf5_group(group, constants):
 
 
 def build_window_from_model(
-    object_id, model, constants, redshift, gentype, base_epochs=None, noise_seed=None
+    object_id,
+    model,
+    constants,
+    redshift,
+    gentype,
+    base_epochs=None,
+    noise_seed=None,
+    visit_index_offset=0,
 ):
     """Grilla fija NUMBER_OF_EPOCHS épocas × bandas del tier desde la primera detección S/N>=5.
     Magnitud observada = realización ruidosa en espacio de FLUJO -> mag. Filas no observadas por la
     cadencia llevan observed=False y mag_observed/mag_err = NaN (pero conservan mag_true del modelo).
     Si base_epochs es None se deriva del rango MJD del modelo (camino OpenUniverse); si se pasa, se usa
     tal cual (camino KN: offset de explosion + cadencia). object_id se guarda tal cual (los OU pasan su
-    id entero como string; las KN pasan "simulation_id_angle_index_explosion_offset_days"); el ruido se
-    siembra con noise_seed (default int(object_id), valido para los OU)."""
+    id entero como string; las KN el de kn_object_id); el ruido se siembra con noise_seed (default
+    int(object_id), valido para los OU). `visit_index_offset` fija la paridad de la primera visita de
+    la grilla: 0 para los OU, cuyas visitas SON las del survey, y la paridad sorteada para las KN,
+    cuya grilla se reconstruye desde el merger (ver CADENCE_PARITY_PERIOD)."""
     if len(model) == 0:
         return None
     if noise_seed is None:
@@ -107,7 +125,9 @@ def build_window_from_model(
         base_epochs, schedule = visit_schedule(window_start, window_end, constants)
     else:
         base_epochs = np.asarray(base_epochs, dtype=float)
-        schedule = cadence_schedule(base_epochs, constants["bands"], constants["anchor_band"])
+        schedule = cadence_schedule(
+            base_epochs, constants["bands"], constants["anchor_band"], visit_index_offset
+        )
 
     exposure_by_band = constants["exposure_time"]
     base_zeropoint_by_band = constants["zeropoint"]
@@ -296,9 +316,12 @@ def nearest_time_index(simulation_time_grids, simulation_id, rest_phase_days):
 
 
 def sample_kn_realizations_on_grid(redshift_grid, realizations_per_redshift, simulation_pool, rng):
-    """realizations_per_redshift sorteos (simulacion, angulo, offset de explosion) por cada z de la
-    grilla. noise_id secuencial siembra el ruido; el mismo set de realizaciones se comparte entre
-    tiers (la misma KN observada en deep y wide)."""
+    """realizations_per_redshift sorteos (simulacion, angulo, offset de explosion, paridad de la
+    cadencia) por cada z de la grilla. noise_id secuencial siembra el ruido; el mismo set de
+    realizaciones se comparte entre tiers (la misma KN observada en deep y wide).
+
+    `cadence_parity` se sortea aparte del offset y con la misma probabilidad: juntos reproducen la
+    fase uniforme del merger dentro del ciclo de 10 d de la cadencia (ver CADENCE_PARITY_PERIOD)."""
     realizations = {}
     noise_id = 0
     for redshift in np.asarray(redshift_grid, dtype=float):
@@ -309,17 +332,21 @@ def sample_kn_realizations_on_grid(redshift_grid, realizations_per_redshift, sim
                 "simulation_id": int(rng.choice(simulation_pool)),
                 "angle_index": int(rng.integers(N_ANGLE_BINS)),
                 "explosion_offset_days": float(rng.uniform(0.0, EXPLOSION_OFFSET_MAX_DAYS)),
+                "cadence_parity": int(rng.integers(CADENCE_PARITY_PERIOD)),
             }
             noise_id += 1
     return realizations
 
 
 def kn_object_id(realization):
-    """object_id de la KN = simulation_id_angle_index_explosion_offset_days_redshift (toda la
-    realizacion; el z va incluido porque la grilla repite sim/angulo/offset a distintos z)."""
+    """object_id de la KN = simulation_id_angle_index_offset_redshift_parity_noiseid. El
+    simulation_id va PRIMERO porque el split anti-fuga del training lo lee de ahi
+    (training/openuniverse_data.py). El noise_id va al final y es lo que hace el id unico por
+    construccion: sim/angulo/z/offset-a-4-decimales colisionaban ~2 veces por millon."""
     return (
         f"{realization['simulation_id']}_{realization['angle_index']}_"
-        f"{realization['explosion_offset_days']:.4f}_{realization['redshift']:.4f}"
+        f"{realization['explosion_offset_days']:.4f}_{realization['redshift']:.4f}_"
+        f"{realization['cadence_parity']}_{realization['noise_id']}"
     )
 
 
@@ -411,6 +438,7 @@ def kn_windows_for_tier(kn_models, constants):
             KN_GENTYPE,
             base_epochs=base_epochs,
             noise_seed=noise_seed,
+            visit_index_offset=realization["cadence_parity"],
         )
         if window is None:
             n_skipped += 1
@@ -502,6 +530,7 @@ def _kn_simulation_task(work_item):
                 KN_GENTYPE,
                 base_epochs=base_epochs,
                 noise_seed=noise_seed,
+                visit_index_offset=realization["cadence_parity"],
             )
             if window is not None:
                 windows[tier].append(window)

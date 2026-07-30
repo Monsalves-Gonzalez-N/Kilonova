@@ -10,12 +10,19 @@ entrenamiento.
 | archivo | qué es | generado por |
 |---|---|---|
 | `early_windows_{deep,wide}.parquet` | contaminantes OpenUniverse (SN, TDE, SLSN, PISN) | `kn-run-openuniverse`, 2026-07-28 |
-| `kn_windows_{deep,wide}.parquet` | kilonovas LANL inyectadas | `kn-kilonova-windows`, 2026-07-30 |
+| `kn_windows_{deep,wide}.parquet` | kilonovas LANL inyectadas | `kn-kilonova-windows`, 2026-07-30 (2ª corrida del día: paridad de cadencia) |
 
 Las magnitudes de los contaminantes vienen del snana de OpenUniverse, que ya trae la
 K-corrección y todo lo demás incorporado; este pipeline solo les aplica la receta de ruido y la
 ventana. Por eso **ningún fix de la fotometría sintética los toca** — esa fotometría existe
 únicamente en el camino de las KN, que parten de espectros LANL en reposo.
+
+## Superado — conservado en disco
+
+| archivo | por qué quedó obsoleto |
+|---|---|
+| `kn_windows_{deep,wide}.parquet.cadence-parity-leak` | la fuga de paridad de la cadencia de más abajo (1ª corrida del 2026-07-30, la del factor angular) |
+| `openuniverse_tokens.npz.stale-2026-07-30` | caché de tokens construida sobre esos parquets |
 
 ## Superado — **borrado el 2026-07-30** (30 GB)
 
@@ -101,6 +108,27 @@ los `+inf` presentes (42 deep, 3 246 wide) son no-detecciones reales según la c
 Las bandas no-ancla salen con `observed=False` en el 50.0% exacto de sus filas, que es la cadencia
 por diseño: la ancla en todas las visitas, el resto en visitas alternas (`cadence_schedule`).
 
+### La generación vigente: paridad de la cadencia (2ª corrida del 2026-07-30)
+
+Misma grilla, mismos tres bugs corregidos y mismo factor angular; lo único que cambia es que la
+paridad de la cadencia ya se sortea (sección de más abajo). Corrida de 15:22 a 17:56, 30 workers,
+108 KN/s.
+
+| | deep | wide |
+|---|---|---|
+| KN con ≥1 detección / inyectadas | 721 773 → **752 474** / 1e6 | 590 914 → **649 211** / 1e6 |
+| filas | 14 435 450 → **15 049 470** | 11 818 280 → **12 984 220** |
+| z máximo con detección | **1.000** (borde de la grilla) | **1.000** |
+
+Suben las detecciones (+4.3% deep, +9.9% wide) porque la mitad de las KN caen ahora en la paridad
+que observa temprano el otro par de bandas, y algunas que antes no llegaban a SNR≥5 ahora sí. Ojo:
+el set de realizaciones **no** es el mismo que el de la 1ª corrida aunque la semilla no cambie —
+sortear la paridad extrae un número más por realización y desplaza el stream del RNG.
+
+Chequeos sobre las cuatro fuentes vigentes: `object_id` únicos, **0** `NaN` en `mag_true`, **0**
+filas de banda ancla sin observar, **0** filas observadas sin magnitud, **0** `snr==0` con `mag_err`
+finito. Los `+inf` (120 deep, 4 791 wide, ninguno en OU) son no-detecciones reales.
+
 Contra Chase et al. (z50%=0.29, z5%=0.96, métrica más laxa): **wide** queda por debajo en ambos
 percentiles, como se esperaba. **deep** los supera —su z5% pasa de 1.0— coherente con que el
 `m_lim` único de Chase se parece más al tier wide, pero hay que decirlo al citar la comparación.
@@ -148,35 +176,80 @@ mediano ~1e-16, exacto en punto flotante). El resto es el bug 2, concentrado en 
 las filas desviadas en wide— y en el 90% de los casos la magnitud nueva es **más débil**, que es
 la dirección correcta al quitar el flujo inventado.
 
+## El otro bug grande: la paridad de la cadencia (fuga de etiqueta)
+
+Detectado el **2026-07-30**, verificando que los tres bugs de fotometría estuvieran cerrados sobre
+los ficheros del factor angular. No es fotometría: es **qué bandas están disponibles**, la misma
+familia que el bug 2, y bastante más grande.
+
+El patrón de bandas (`roman_noise.bands_observed_at_visit`) tiene periodo **2 visitas**: pares →
+ancla + las dos no-ancla más azules (ZYJ deep / RZY wide), impares → ancla + las dos rojas (ZHF /
+RJH). Los contaminantes se apoyan en la secuencia de visitas **del survey**, pero la grilla KN se
+reconstruye por objeto desde el merger: `base_epochs = explosion_offset + 5*arange(8)`, con
+`EXPLOSION_OFFSET_MAX_DAYS = 5.0` = **un** periodo de cadencia. Su índice de visita 0 es siempre la
+primera visita post-merger, o sea siempre paridad par; y como la KN es rápida y casi siempre se
+detecta ahí, la fase de la cadencia quedaba impresa en la etiqueta.
+
+La fase del merger dentro del ciclo de 10 d tiene **dos** grados de libertad: el retardo hasta la
+primera visita y la **paridad** de esa visita. El offset U[0,5) sí daba bien el retardo; la paridad
+no se sorteaba. Ahora `sample_kn_realizations_on_grid` extrae `cadence_parity` aparte y
+`cadence_schedule` la aplica vía `visit_index_offset`.
+
+Fase par en la época de primera detección, y lo que se puede sacar solo de la máscara:
+
+| | KN antes | KN después | contaminantes |
+|---|---|---|---|
+| deep | 95.28% | **46.14%** | 40.28% |
+| wide | 88.15% | **40.37%** | 14.26% |
+| combinado | 92.07% | **43.46%** | 28.59% |
+
+Lo que se puede sacar de una regla que **solo mira la máscara** ("fase par ⇒ KN"), sin fotometría ni
+tiempos:
+
+| | antes | después |
+|---|---|---|
+| accuracy | **80.73%** | **58.35%** |
+| baseline por clase mayoritaria | 54.90% | 53.27% |
+| razón de verosimilitud P(par\|KN)/P(par\|OU) | 3.22 | **1.52** |
+
+El `val_acc_noz` del modelo de julio era ~0.91, así que una parte de eso era artefacto. El
+transformer lo veía entero: las bandas no observadas se emiten como tokens `n`.
+
+**El sesgo del lado OU no es un bug**: su grilla es la del survey real, y las bandas rojas —las que
+detectan primero a los contaminantes de z~1.3— caen en visitas impares. Que las KN, azules y
+rápidas, prefieran las pares es física legítima; lo que no lo era es que la prefirieran al 92% por
+construcción. Que tras el fix no quede exactamente en 50% también es física: cuando la detección no
+cae en la visita 0 cae en la 1, de paridad opuesta, y qué banda dispara primero depende del color.
+De ahí que quede un residuo de 5 puntos sobre el baseline: eso es información de color y escala
+temporal, aprendible de forma legítima, no un atajo.
+
+Fijado por `test_cadence_parity_selects_the_band_pair_of_the_first_epoch` (las dos paridades dan
+pares de banda complementarios en la primera época) y
+`test_sample_kn_realizations_on_grid_draws_both_cadence_parities` (50/50 e independiente del
+offset).
+
+## Resuelto: `kn_object_id` ya es único
+
+Era `{sim}_{angle}_{offset:.4f}_{z:.4f}` y dejaba fuera el `noise_id`, el único campo único de la
+realización, así que dos sorteos colisionaban si coincidían sim, ángulo y nodo de z y sus offsets
+redondeaban igual a 4 decimales: **~2 esperadas por millón**, 3 en la corrida del 2026-07-30 (las
+mismas en los dos tiers, que comparten el set de realizaciones). No era un fallo de lógica sino el
+cumpleaños esperado de esa clave, pero los dos caminos no se comportaban igual: el paralelo
+(`_kn_simulation_task`) escribía las dos ventanas —un objeto de 40 filas— y el secuencial
+(`build_kn_models`) acumulaba en un dict indexado por el id y **se comía una en silencio**.
+
+Desde el 2026-07-30 el id es `{sim}_{angle}_{offset:.4f}_{z:.4f}_{parity}_{noise_id}`: el
+`noise_id` al final lo hace único por construcción, no solo improbable (verificado sobre el sorteo
+completo de 1e6: 0 colisiones, frente a 1 con la clave vieja sobre ese mismo sorteo). El
+`simulation_id` sigue siendo el **primer** campo porque `training/openuniverse_data.py` lo lee de
+ahí para el split anti-fuga por modelo de eyecta. `scripts/dedupe_kn_windows.py`, que hacía la
+edición quirúrgica sobre los parquets viejos, queda obsoleto.
+
 ## Pendiente conocido
 
-**`kn_object_id` no es único por construcción** (`early_windows.py:317`): es
-`{sim}_{angle}_{offset:.4f}_{z:.4f}` y deja fuera el `noise_id`, que es el único campo único de la
-realización. Dos realizaciones colisionan si coinciden sim, ángulo y nodo de z y sus offsets
-redondean igual a 4 decimales. Con 10 000 realizaciones por nodo, 900×54 = 48 600 celdas
-(sim, ángulo) y 5×10⁴ cajones de offset, salen **~2 colisiones esperadas por millón** — en la
-corrida del 2026-07-30 hubo **3, las mismas en los dos tiers** (el set de realizaciones se comparte
-entre tiers). No es un fallo de lógica, es el cumpleaños esperado de esa clave.
-
-Los dos comportamientos posibles no son iguales: el camino paralelo (`_kn_simulation_task`) escribe
-las dos ventanas, así que se ven como un objeto de 40 filas; el secuencial (`build_kn_models`)
-acumula en un dict indexado por el id y **se comería una en silencio**.
-
-En los ficheros vigentes **ya no hay duplicados**: el 2026-07-30 se borró el segundo bloque de cada
-par (60 filas por tier, se conservó el primero), de ahí que las cuentas de arriba sean 721 773 y
-590 914 y no las 721 776 / 590 917 que dice el log de la corrida. Fue una edición quirúrgica sobre
-el parquet, **no** una regeneración: volver a correr `kn-kilonova-windows` con la misma semilla
-reproduce los duplicados. El arreglo de raíz —meter `noise_id` en `kn_object_id`— sigue pendiente.
-
-(Aparte hay 2 objetos de deep con 15 filas en vez de 20: `N_KN_VISITS = 8` y la ventana es primera
+(Hay unos pocos objetos de deep con 15 filas en vez de 20: `N_KN_VISITS = 8` y la ventana es primera
 detección + 4 épocas, así que si la detección cae en la visita 6 no quedan 4 épocas detrás. Eso es
 legítimo, no un duplicado.)
-
-**`training/openuniverse_data.py` se queda sin clase KN**: consume los
-`kilonova_windows_{deep,wide}.hdf5` que se borraron el 2026-07-30, y **no** lee
-`kn_windows_*.parquet`. Hasta que exista un conversor parquet→hdf5 o el dataloader aprenda a leer
-el parquet, el training no arranca en esta máquina — que es preferible a que arranque en silencio
-sobre las KN con los tres bugs, como venía pasando.
 
 `dvc add` del nuevo `lanl_spectra.parquet`: el `.dvc` commiteado sigue apuntando al hash de la
 versión por bin angular. Pendiente de hacer en el Mac, que es donde el remote (`/Volumes/Elements`)

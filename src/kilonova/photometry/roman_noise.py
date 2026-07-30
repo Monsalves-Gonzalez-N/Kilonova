@@ -200,14 +200,19 @@ def bands_observed_at_visit(visit_index, bands, anchor):
     return observed
 
 
-def cadence_schedule(visit_times, bands, anchor):
+def cadence_schedule(visit_times, bands, anchor, visit_index_offset=0):
     """{band: array of observed visit times} over the regular visit grid `visit_times` (one every
     BASE_CADENCE_DAYS), applying bands_observed_at_visit per visit index: anchor at all visits, each
-    other band every other visit. Inverse view of the same rule, for the per-band sampling loops."""
+    other band every other visit. Inverse view of the same rule, for the per-band sampling loops.
+
+    `visit_index_offset` shifts which parity the first element of `visit_times` has. It exists for
+    grids that are NOT anchored to the survey's absolute visit sequence: the pattern repeats every
+    two visits, so a grid built as `t0 + 5*arange(n)` would otherwise always start on an even
+    visit. Callers whose grid IS the survey's own (the OpenUniverse path) leave it at 0."""
     visit_times = np.asarray(visit_times, dtype=float)
     observed_times = {band: [] for band in bands}
     for visit_index, visit_time in enumerate(visit_times):
-        for band in bands_observed_at_visit(visit_index, bands, anchor):
+        for band in bands_observed_at_visit(visit_index + visit_index_offset, bands, anchor):
             observed_times[band].append(visit_time)
     return {band: np.asarray(times, dtype=float) for band, times in observed_times.items()}
 

@@ -73,6 +73,68 @@ def test_build_window_none_when_undetectable(tier_constants):
     assert early_windows.build_window_from_model("123", {}, tier_constants, 0.2, 10) is None
 
 
+def test_cadence_parity_selects_the_band_pair_of_the_first_epoch(tier_constants):
+    """The kilonova visit grid is rebuilt from the merger (offset + 5*arange), so its visit 0 is
+    always the first post-merger visit. Since a kilonova is fast it is almost always detected right
+    there, and without a parity draw the first epoch would always carry the same two non-anchor
+    bands -- a label shortcut, because the contaminants sit on the survey's own grid and split ~50/50
+    (measured 92% vs 29%: the observation mask alone classified at 80.7%)."""
+    bands = tier_constants["bands"]
+    base_epochs = np.arange(0.0, 40.0, 5.0)
+    model = bright_model(bands)
+
+    def first_epoch_bands(parity):
+        window = early_windows.build_window_from_model(
+            "123",
+            model,
+            tier_constants,
+            0.2,
+            early_windows.KN_GENTYPE,
+            base_epochs=base_epochs,
+            visit_index_offset=parity,
+        )
+        first = window[window["days_since_detection"] == 0.0]
+        return set(first.loc[first["observed"], "band"])
+
+    even, odd = first_epoch_bands(0), first_epoch_bands(1)
+    assert even != odd
+    assert tier_constants["anchor_band"] in even & odd  # the anchor is observed either way
+    assert len(even) == len(odd) == 3
+    assert even | odd == set(bands)  # complementary non-anchor pairs, together the whole tier
+
+
+def test_kn_object_id_is_unique_and_keeps_the_simulation_id_first():
+    """kn_object_id used to leave out noise_id, the only field unique to a realization, so two draws
+    colliding on sim/angle/z with offsets rounding alike shared an id (~2 per million). The
+    simulation_id has to stay the FIRST field: training/openuniverse_data.py reads it off there to
+    keep one ejecta model inside a single split."""
+    realizations = early_windows.sample_kn_realizations_on_grid(
+        np.geomspace(0.01, 1.0, 5),
+        realizations_per_redshift=200,
+        simulation_pool=[7, 8],
+        rng=np.random.default_rng(0),
+    )
+    ids = [early_windows.kn_object_id(realization) for realization in realizations.values()]
+    assert len(set(ids)) == len(ids)
+    for realization, object_id in zip(realizations.values(), ids, strict=True):
+        assert object_id.split("_")[0] == str(realization["simulation_id"])
+
+
+def test_sample_kn_realizations_on_grid_draws_both_cadence_parities():
+    realizations = early_windows.sample_kn_realizations_on_grid(
+        np.geomspace(0.01, 1.0, 5),
+        realizations_per_redshift=400,
+        simulation_pool=[7, 8],
+        rng=np.random.default_rng(0),
+    )
+    parities = np.array([r["cadence_parity"] for r in realizations.values()])
+    assert set(np.unique(parities)) == {0, 1}
+    assert parities.mean() == pytest.approx(0.5, abs=0.05)
+    # the parity must be independent of the sub-period delay, not a function of it
+    offsets = np.array([r["explosion_offset_days"] for r in realizations.values()])
+    assert abs(np.corrcoef(parities, offsets)[0, 1]) < 0.1
+
+
 def test_sample_kn_realizations_on_grid_covers_every_redshift():
     redshift_grid = np.geomspace(0.01, 1.0, 5)
     realizations = early_windows.sample_kn_realizations_on_grid(
