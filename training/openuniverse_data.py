@@ -1,14 +1,13 @@
 """OpenUniverse dataloader for the kilonova classifier (KN vs. everything else).
 
-Four source files:
+Four source files, all long-format parquet with the same window schema:
 
-    * kilonova_windows_deep.hdf5  / kilonova_windows_wide.hdf5   -> the KN class
+    * kn_windows_deep.parquet     / kn_windows_wide.parquet      -> the KN class
     * early_windows_deep.parquet  / early_windows_wide.parquet   -> the contaminants
 
-The data already comes windowed (up to 4 visit-day epochs x 5 bands for the contaminants,
-3 epochs x 5 bands for the KN), so there is no first-detection anchoring / windowing to do —
-this module only maps each measurement to a token, fits the magnitude normalization, and builds
-a leakage-aware train/val/test split.
+The data already comes windowed (up to 4 visit-day epochs x 5 bands per tier), so there is no
+first-detection anchoring / windowing to do — this module only maps each measurement to a token,
+fits the magnitude normalization, and builds a leakage-aware train/val/test split.
 
 Task: BINARY {KN, other}.  `other` pools every SNANA contaminant (SN II/Ia/Ib/Ic/Iax,
 TDE, SLSN-I, PISN). deep and wide are COMBINED into one model over a 6-band vocabulary
@@ -16,9 +15,10 @@ TDE, SLSN-I, PISN). deep and wide are COMBINED into one model over a 6-band voca
 (it never produces a token), exactly like a real missing band.
 
 Leakage control:
-    * KN  -> split by `simulation_id` (the physical ejecta model). ~630 models each spawn many
-      realizations (x angle_index x redshift); a model must live in exactly one split, GLOBAL
-      across deep+wide (the same simulation_id appears in both tiers).
+    * KN  -> split by `simulation_id` (the physical ejecta model), read off the first field of the
+      kn_object_id. 900 models each spawn many realizations (x angle_index x redshift x noise); a
+      model must live in exactly one split, GLOBAL across deep+wide (the same simulation_id appears
+      in both tiers).
     * contaminants -> split by `object_id`, stratified by original class. There is NO usable
       template id in the parquet: `snana_id` has only 33 values and all 33 span every class, so
       it is a SNANA batch/file id, not the SED model. SALT2 Ia are continuous (no template
@@ -33,10 +33,10 @@ train_lightning.py.
 Usage:
     from openuniverse_data import build_dataloaders, GROUP_ORDER
     data = build_dataloaders(
-        deep_hdf5='.../kilonova_windows_deep.hdf5',
-        wide_hdf5='.../kilonova_windows_wide.hdf5',
-        deep_parquet='.../early_windows_deep.parquet',
-        wide_parquet='.../early_windows_wide.parquet',
+        kn_deep='.../kn_windows_deep.parquet',
+        kn_wide='.../kn_windows_wide.parquet',
+        contaminant_deep='.../early_windows_deep.parquet',
+        contaminant_wide='.../early_windows_wide.parquet',
         batch_size=1024,
     )
     train_loader = data['train_loader']
@@ -45,7 +45,6 @@ Usage:
 import os
 import time
 
-import h5py
 import numpy as np
 import pyarrow.parquet as pq
 import torch
@@ -70,7 +69,10 @@ TOKEN_TYPE_TO_INDEX = {"d": 0, "u": 1, "n": 2}
 GROUP_ORDER = ["other", "KN"]
 GROUP_TO_LABEL = {"other": 0, "KN": 1}
 
-EPOCHS_PER_WINDOW = 3  # the model sees at most 3 visit-day epochs (KN windows only have 3)
+# The model sees at most 3 visit-day epochs. This was set by the old KN hdf5, whose windows only
+# had 3; kn_windows_*.parquet carries 4, the same as the contaminants, so 4 is now available and
+# would be a model-side decision -- left at 3 so switching sources changes no behaviour.
+EPOCHS_PER_WINDOW = 3
 SNR_MIN = 5.0  # detection threshold, used as the fallback when no `detected` flag
 
 PER_TOKEN_KEYS = [
@@ -134,65 +136,13 @@ def _vectorize_tokens(
 
 
 # ----------------------------------------------------------------------------- source readers
-def _read_kn_hdf5(path, tier, verbose=True):
-    """Read every KN object from one tier's hdf5 (the per-group read is the slow part; the token
-    mapping is then vectorized over the concatenated columns). Returns (big, counts, meta).
-    group_key = simulation_id (GLOBAL across deep+wide so a model in both tiers stays one group).
+def _read_long_parquet(path, group_key_from_ids):
+    """Read every object from one long-format parquet (~20 rows/object), fully vectorized.
+    Returns (big, counts, meta).
 
-    `band` is identical for every group in a tier (3 epochs x 5 bands, fixed order) so it is read
-    once and tiled; `snr` is skipped (KN groups carry the `detected` flag) -> 6 reads/group."""
-    days, observed, detected = [], [], []
-    mag_observed, mag_err, mag_limit = [], [], []
-    object_code, redshift, group_key = [], [], []
-    with h5py.File(path, "r") as handle:
-        keys = list(handle.keys())
-        band_ref = handle[keys[0]]["band"][()]
-        per_object_length = band_ref.shape[0]
-        for code, key in enumerate(keys):
-            group = handle[key]
-            days.append(group["days_since_detection"][()])
-            observed.append(group["observed"][()])
-            detected.append(group["detected"][()])
-            mag_observed.append(group["mag_observed"][()])
-            mag_err.append(group["mag_err"][()])
-            mag_limit.append(group["mag_limit_5sigma"][()])
-            object_code.append(np.full(per_object_length, code, dtype=np.int64))
-            redshift.append(float(group.attrs["redshift"]))
-            group_key.append(f"sim_{int(group.attrs['simulation_id'])}")
-            if verbose and code % 50000 == 0 and code:
-                print(f"    {os.path.basename(path)}: {code:,} groups...")
-
-    letters = np.array(
-        [BAND_NAME_TO_LETTER.get(b.decode() if isinstance(b, bytes) else str(b)) for b in band_ref]
-    )
-    keep_band = letters != None  # noqa: E711  (constant per object -> tile)
-    band_index_object = np.array([BAND_TO_INDEX[b] for b in letters[keep_band]], dtype=np.int64)
-    keep = np.tile(keep_band, len(redshift))
-    band_index = np.tile(band_index_object, len(redshift))
-
-    big, counts = _vectorize_tokens(
-        object_code=np.concatenate(object_code)[keep],
-        band_index=band_index,
-        day=np.concatenate(days)[keep],
-        observed=np.concatenate(observed).astype(bool)[keep],
-        detected=np.concatenate(detected).astype(bool)[keep],
-        snr=None,
-        mag_observed=np.concatenate(mag_observed)[keep],
-        mag_err=np.concatenate(mag_err)[keep],
-        mag_limit_5sigma=np.concatenate(mag_limit)[keep],
-    )
-    meta = {
-        "orig_label": np.full(len(redshift), "KN"),
-        "redshift": np.array(redshift, dtype=np.float32),
-        "group_key": np.array(group_key),
-    }
-    return big, counts, meta
-
-
-def _read_contaminants_parquet(path, tier):
-    """Read every contaminant object from one tier's parquet (long format, ~20 rows/object),
-    fully vectorized. Returns (big, counts, meta). group_key = object_id (object-level split),
-    tier-namespaced so deep/wide ids never collide."""
+    Both classes come from the same window schema, so the only thing that differs between them is
+    what a "group" is for the leakage-aware split -- hence `group_key_from_ids`, a callable mapping
+    the sorted unique object_ids to their split group."""
     table = pq.read_table(
         path,
         columns=[
@@ -233,20 +183,38 @@ def _read_contaminants_parquet(path, tier):
     meta = {
         "orig_label": first_row["label"].to_numpy().astype(str),
         "redshift": first_row["z_CMB"].to_numpy().astype(np.float32),
-        "group_key": np.array([f"{tier}_{i}" for i in unique_ids]),
+        "group_key": group_key_from_ids(unique_ids),
     }
     return big, counts, meta
 
 
+def _read_contaminants_parquet(path, tier):
+    """OpenUniverse contaminants. Split by object: group_key = object_id, tier-namespaced so deep
+    and wide ids never collide."""
+    return _read_long_parquet(path, lambda ids: np.array([f"{tier}_{i}" for i in ids]))
+
+
+def _read_kn_parquet(path, tier):  # tier unused: KN groups are deliberately not tier-namespaced
+    """Kilonovas from kn_windows_{tier}.parquet.
+
+    Split by the LANL ejecta model, not by object: one simulation spawns many realizations
+    (x angle x redshift x noise) and all of them have to land in the same split, or the model sees
+    the same SED in train and test. kn_object_id is
+    `{simulation_id}_{angle_index}_{offset:.4f}_{z:.4f}` (kilonova.simulation.early_windows), so the
+    first field is that simulation_id. NO tier prefix here, unlike the contaminants: the same
+    simulation is observed by both tiers and must stay a single group across the two files."""
+    return _read_long_parquet(path, lambda ids: np.array([f"sim_{i.split('_')[0]}" for i in ids]))
+
+
 # ----------------------------------------------------------------------------- assembly + cache
-def _assemble(deep_hdf5, wide_hdf5, deep_parquet, wide_parquet, verbose=True):
+def _assemble(kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=True):
     """Read all four sources into flat ragged arrays (CSR-style: one big array per field +
     per-object offsets) plus per-object metadata."""
     sources = [
-        ("KN", _read_kn_hdf5, deep_hdf5, "deep"),
-        ("KN", _read_kn_hdf5, wide_hdf5, "wide"),
-        ("contaminant", _read_contaminants_parquet, deep_parquet, "deep"),
-        ("contaminant", _read_contaminants_parquet, wide_parquet, "wide"),
+        ("KN", _read_kn_parquet, kn_deep, "deep"),
+        ("KN", _read_kn_parquet, kn_wide, "wide"),
+        ("contaminant", _read_contaminants_parquet, contaminant_deep, "deep"),
+        ("contaminant", _read_contaminants_parquet, contaminant_wide, "wide"),
     ]
     bigs, counts_list = [], []
     orig_label, redshift, group_key, is_kn = [], [], [], []
@@ -282,7 +250,7 @@ def _assemble(deep_hdf5, wide_hdf5, deep_parquet, wide_parquet, verbose=True):
     return big, meta
 
 
-def _load_or_build(cache_path, deep_hdf5, wide_hdf5, deep_parquet, wide_parquet, verbose=True):
+def _load_or_build(cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=True):
     if cache_path and os.path.exists(cache_path):
         if verbose:
             print(f"loading cached tokens from {cache_path}")
@@ -298,7 +266,7 @@ def _load_or_build(cache_path, deep_hdf5, wide_hdf5, deep_parquet, wide_parquet,
         return big, meta
     if verbose:
         print("assembling tokens from source files...")
-    big, meta = _assemble(deep_hdf5, wide_hdf5, deep_parquet, wide_parquet, verbose=verbose)
+    big, meta = _assemble(kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=verbose)
     if cache_path:
         np.savez(cache_path, **big, **meta)
         if verbose:
@@ -482,10 +450,10 @@ def collate_token_windows(batch):
 
 # ----------------------------------------------------------------------------- entry point
 def build_dataloaders(
-    deep_hdf5,
-    wide_hdf5,
-    deep_parquet,
-    wide_parquet,
+    kn_deep,
+    kn_wide,
+    contaminant_deep,
+    contaminant_wide,
     batch_size=1024,
     fractions=(0.90, 0.05, 0.05),
     split_seed=42,
@@ -498,7 +466,7 @@ def build_dataloaders(
     normalization on TRAIN detections, and return the dataloaders + metadata."""
     global MAG_MEAN, MAG_STD, SIGMA_MAG_MEAN, SIGMA_MAG_STD
 
-    big, meta = _load_or_build(cache_path, deep_hdf5, wide_hdf5, deep_parquet, wide_parquet, verbose)
+    big, meta = _load_or_build(cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose)
 
     label_by_index = np.where(meta["is_kn"], GROUP_TO_LABEL["KN"], GROUP_TO_LABEL["other"])
 

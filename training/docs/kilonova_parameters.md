@@ -22,7 +22,9 @@ por realización.
 
 ## Parámetros por ventana/realización (no por simulación física)
 
-Estos vienen de `kilonova_windows_{deep,wide}.hdf5` (uno por objeto/ventana muestreada):
+Estos vienen de `kn_windows_{deep,wide}.parquet` (uno por objeto/ventana muestreada). En el parquet
+no son columnas propias: van codificados en el `object_id`,
+`{simulation_id}_{angle_index}_{explosion_offset:.4f}_{z:.4f}`:
 
 | parámetro                | descripción                                              |
 |----------------------------|-----------------------------------------------------------|

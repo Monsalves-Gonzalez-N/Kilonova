@@ -34,7 +34,8 @@ are needed), plain `pip install -e .` works: galsim is imported lazily and only 
 Large files never live in git. There are two kinds:
 
 - **DVC-tracked artifacts** (`*.dvc` pointer files): `lanl_spectra.parquet`,
-  `hourglass_photometry.parquet`, `kilonova_windows_*.hdf5`. Get them with `dvc pull`
+  `hourglass_photometry.parquet`, and the superseded `kilonova_windows_*.hdf5` (June 2026 KN class,
+  deleted locally on 2026-07-30 — `kn_windows_*.parquet` replaces it). Get them with `dvc pull`
   (remote: `/Volumes/Elements/dvc-kilonova`, mount the drive first); publish new versions with
   `dvc add <file> && dvc push`.
 - **External sources** (documented, not tracked): the OpenUniverse snana files on

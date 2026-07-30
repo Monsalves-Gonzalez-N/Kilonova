@@ -3,12 +3,13 @@
 Run locally on GPU:
     python train_lightning.py --data-dir data/openuniverse --epochs 150
 
-Binary classification {KN, other}: LANL kilonovas (kilonova_windows_*.hdf5) vs Roman
+Binary classification {KN, other}: LANL kilonovas (kn_windows_*.parquet) vs Roman
 contaminants (early_windows_*.parquet). Inverse-frequency class weights, AdamW,
 loss + accuracy metrics; model selection by val_acc_noz.
 """
 
 import argparse
+import json
 import os
 
 import lightning as L
@@ -192,10 +193,10 @@ def train(
     L.seed_everything(seed)
 
     data = build_dataloaders(
-        deep_hdf5=os.path.join(data_dir, "kilonova_windows_deep.hdf5"),
-        wide_hdf5=os.path.join(data_dir, "kilonova_windows_wide.hdf5"),
-        deep_parquet=os.path.join(data_dir, "early_windows_deep.parquet"),
-        wide_parquet=os.path.join(data_dir, "early_windows_wide.parquet"),
+        kn_deep=os.path.join(data_dir, "kn_windows_deep.parquet"),
+        kn_wide=os.path.join(data_dir, "kn_windows_wide.parquet"),
+        contaminant_deep=os.path.join(data_dir, "early_windows_deep.parquet"),
+        contaminant_wide=os.path.join(data_dir, "early_windows_wide.parquet"),
         batch_size=batch_size,
         num_workers=num_workers,
         cache_path=os.path.join(data_dir, "openuniverse_tokens.npz"),
@@ -208,6 +209,14 @@ def train(
     print(f"class balance: {data['class_balance']}")
     print(f"normalization: {data['normalization']}")
     print(f"validation regimes: {regime_names}")
+
+    # Persist the magnitude normalization next to the token cache. run_evaluation_test_only.py and
+    # attention_visualization.ipynb read it to score a checkpoint on the same token scale it was
+    # trained on; it used to be maintained by hand, which is how it went stale once already.
+    normalization_path = os.path.join(data_dir, "normalization.json")
+    with open(normalization_path, "w") as normalization_file:
+        json.dump(data["normalization"], normalization_file, indent=2)
+    print(f"wrote {normalization_path}")
 
     weights = class_weights_from_loader(train_loader, num_classes=NUM_CLASSES, mode=weight_mode)
     print(f"class weights ({weight_mode}) {GROUP_ORDER}: {weights.tolist()}")
@@ -314,7 +323,7 @@ def parse_arguments():
     parser.add_argument(
         "--data-dir",
         default="data/openuniverse",
-        help="directory holding the kilonova_windows_*.hdf5 and early_windows_*.parquet",
+        help="directory holding the kn_windows_*.parquet and early_windows_*.parquet",
     )
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch-size", type=int, default=512)
