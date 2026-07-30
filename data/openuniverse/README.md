@@ -44,6 +44,13 @@ angular (hay que rehacerlos con `kn-extinguish`), y `lanl_spectra.parquet.per-an
 la versión previa del caché: reproducible con `kn-cache-lanl` sobre `kn_sim_cube_v1` desde un
 checkout anterior a `c696ed0`.
 
+También se borró la copia local de la **grilla cruda** `kn_sim_cube_v1`: el tarball (12 GB) y 2698
+de los 2700 `.dat` (46 GB). Se conservaron a propósito los dos ficheros del modelo
+`md0.1_vd0.05_mw0.1_vw0.05` (`_spec_` + `_mags_`, 54 MB) porque son los que lee el test que fija el
+**valor** del factor 54; sin ellos ese test haría skip y nada en esta máquina cazaría una
+normalización equivocada. La grilla completa sigue en el Elements
+(`configs/paths.yaml: lanl_grid_dir`), que es lo que hace recuperable todo esto.
+
 ## El bug grande: el factor angular 54 (4.331 mag)
 
 Detectado el 2026-07-30 comparando contra **Chase et al. 2021 (arXiv:2105.12268)**, que usa esta

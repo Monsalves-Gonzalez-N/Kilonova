@@ -44,7 +44,10 @@ this repository owns data simulation and datasets.
 - Compute split: the full `kn-run-openuniverse` (deep+wide, 33 fields) runs on the training
   laptop (too expensive here); its `early_windows_{deep,wide}.parquet` come back via DVC.
   `kn-cache-lanl` is historical — `lanl_spectra.parquet` was built once from the OLD raw grid
-  (`kn_sim_cube_v1`); the cached parquet is the working source of truth.
+  (`kn_sim_cube_v1`); the cached parquet is the working source of truth. Since 2026-07-30 the local
+  copy of that raw grid is **gone except one model** (the `md0.1_vd0.05_mw0.1_vw0.05` `_spec_`/
+  `_mags_` pair `tests/test_lanl_cache.py` pins the flux normalization against, 54 MB of the 46 GB).
+  Rebuilding the cache, or pinning any other model, needs the Elements drive mounted.
 
 ## Noise recipe (provenance)
 
