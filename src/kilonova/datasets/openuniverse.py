@@ -7,13 +7,18 @@ magnitude and a type flag (detection ``d`` / 5-sigma upper limit ``u`` / instrum
 
 Two upstream sources share the same long-format schema and are loaded the same way:
 
-* the OpenUniverse contaminants written by ``generate_early_windows.py``
+* the OpenUniverse contaminants written by ``kn-run-openuniverse``
   (``early_windows_{deep,wide}.parquet``: gentypes 32/40/57/58, columns ``object_id, gentype,
   label, z_CMB, days_since_detection, band, observed, mag_observed, mag_err, detected,
-  mag_limit_5sigma``);
-* the injected kilonovas written by ``generate_kilonova_hdf5`` in ``kilonova_dataloader.ipynb``
-  (``*.hdf5``: one group per object, gentype 50, datasets ``band, days_since_detection,
-  mag_observed, mag_err, mag_limit_5sigma, detected``; only observed rows are stored).
+  mag_limit_5sigma``) -> ``load_early_windows``;
+* the injected kilonovas written by ``kn-kilonova-windows``
+  (``kn_windows_{deep,wide}.parquet``: gentype 50, same columns minus ``snana_id``)
+  -> ``load_kilonova_windows``.
+
+``load_kilonova_windows_hdf5`` reads the older one-group-per-object hdf5 instead. That was the KN
+format until June 2026; ``kilonova_windows_{deep,wide}.hdf5`` were retired on 2026-07-31 (three
+photometry bugs, no angular factor) and the loader is kept only for hand-made demo files such as
+``kilonova_windows_demo.hdf5``. New work reads the parquet.
 
 The model prepends the ``[CLS]`` and ``[Z]`` tokens itself, so ``collate_token_windows`` emits
 only the per-token fields, ``padding_mask``, the redshift globals and ``label`` -- identical to
@@ -68,19 +73,43 @@ PER_TOKEN_KEYS = [
 GLOBAL_KEYS = ["redshift", "redshift_regime"]
 
 
-def load_early_windows(parquet_paths):
+def _read_windows_parquet(path, max_objects, random_seed):
+    """One window parquet -> (DataFrame, tier), optionally down to ``max_objects`` random objects.
+
+    The subsample is drawn in a first pass over the ``object_id`` column alone and pushed back into
+    the read as a row filter, so a 1.4M-object file never has to be materialized whole just to keep
+    a few thousand light curves (that is the difference between a notebook that opens and one that
+    dies). Sampling is by OBJECT, never by row: half a light curve is not a light curve.
+
+    The tier is read off the bands, which are disjoint between the two: F184 is deep-only and R062
+    wide-only, so the presence of an F band identifies the file without trusting its name.
+    """
+    if max_objects is None:
+        windows = pd.read_parquet(path)
+    else:
+        object_ids = pd.read_parquet(path, columns=["object_id"])["object_id"].unique()
+        if len(object_ids) > max_objects:
+            generator = np.random.default_rng(random_seed)
+            object_ids = generator.choice(object_ids, size=max_objects, replace=False)
+        windows = pd.read_parquet(path, filters=[("object_id", "in", set(object_ids))])
+    return windows, ("deep" if windows["band"].str[0].eq("F").any() else "wide")
+
+
+def load_early_windows(parquet_paths, max_objects=None, random_seed=0):
     """One or more ``early_windows_{tier}.parquet`` files -> a single long DataFrame.
 
     A ``source`` column tags the tier (deep/wide) so the two tiers can be mixed while still
     being separable downstream. ``object_id`` is suffixed with the source to keep ids unique
     across tiers (the same OpenUniverse transient appears in both).
+
+    ``max_objects`` caps the number of objects taken from EACH file (see ``_read_windows_parquet``);
+    None reads everything.
     """
     if isinstance(parquet_paths, (str, bytes)):
         parquet_paths = [parquet_paths]
     frames = []
     for path in parquet_paths:
-        windows = pd.read_parquet(path)
-        tier = "deep" if windows["band"].str[0].eq("F").any() else "wide"
+        windows, tier = _read_windows_parquet(path, max_objects, random_seed)
         windows = windows.assign(
             source=tier,
             tier=tier,
@@ -90,11 +119,43 @@ def load_early_windows(parquet_paths):
     return pd.concat(frames, ignore_index=True)
 
 
-def load_kilonova_windows(hdf5_path):
-    """``generate_kilonova_hdf5`` output (one group per object) -> the same long DataFrame schema
-    as ``load_early_windows``. The cadence gaps are kept as ``observed=False`` rows (NaN photometry)
-    just like OpenUniverse, so kilonovas also get ``n`` tokens; ``gentype`` is forced to 50 (KN) from
-    the group attrs. Older files without an ``observed`` dataset fall back to all-observed.
+def load_kilonova_windows(parquet_paths, max_objects=None, random_seed=0):
+    """One or more ``kn_windows_{tier}.parquet`` files -> the same long DataFrame as the
+    contaminants, with ``source='kn'`` (the tier stays in ``tier``).
+
+    ``object_id`` MUST be namespaced by tier here: unlike the OpenUniverse transients, a kilonova
+    id (``{simulation}_{angle}_{offset}_{z}_{parity}_{seed}``) is generated independently of the
+    tier and the very same id appears in both files. Without the suffix the deep and wide
+    observations of one injection would be grouped into a single 10-band window that no survey ever
+    took.
+
+    Note this is the id used to GROUP tokens into a light curve, not to split train/val/test:
+    splitting on it leaks one LANL ejecta model across splits, since a single simulation spawns many
+    realizations (x angle x offset x redshift x noise). ``training/openuniverse_data.py`` splits on
+    the leading ``simulation_id`` instead, which is what a real training run must do.
+    """
+    if isinstance(parquet_paths, (str, bytes)):
+        parquet_paths = [parquet_paths]
+    frames = []
+    for path in parquet_paths:
+        windows, tier = _read_windows_parquet(path, max_objects, random_seed)
+        windows = windows.assign(
+            source="kn",
+            tier=tier,
+            object_id="kn_" + windows["object_id"].astype(str) + f"_{tier}",
+        )
+        frames.append(windows)
+    return pd.concat(frames, ignore_index=True)
+
+
+def load_kilonova_windows_hdf5(hdf5_path):
+    """Legacy one-group-per-object hdf5 -> the same long DataFrame schema as ``load_early_windows``.
+
+    Superseded by ``load_kilonova_windows`` (parquet) and kept only for hand-made demo files; the
+    generated ``kilonova_windows_{deep,wide}.hdf5`` were retired on 2026-07-31. Cadence gaps are kept
+    as ``observed=False`` rows (NaN photometry) just like OpenUniverse, so kilonovas also get ``n``
+    tokens; ``gentype`` is forced to 50 (KN) from the group attrs. Older files without an ``observed``
+    dataset fall back to all-observed.
     """
     rows = []
     with h5py.File(hdf5_path, "r") as hdf5:
@@ -276,9 +337,14 @@ def build_dataloaders(long_df, batch_size=32, fractions=(0.70, 0.15, 0.15), rand
     Returns ``(loaders, normalization)`` where ``loaders`` is a dict of ``DataLoader`` keyed by
     split. Drop-in for the architecture notebook::
 
-        from openuniverse_dataset import load_early_windows, load_kilonova_windows, build_dataloaders
-        long_df = pd.concat([load_early_windows(['early_windows_deep.parquet', 'early_windows_wide.parquet']),
-                             load_kilonova_windows('kilonova_windows_demo.hdf5')], ignore_index=True)
+        from kilonova.datasets.openuniverse import (
+            load_early_windows, load_kilonova_windows, build_dataloaders)
+        long_df = pd.concat([
+            load_early_windows(['early_windows_deep.parquet', 'early_windows_wide.parquet'],
+                               max_objects=2000),
+            load_kilonova_windows(['kn_windows_deep.parquet', 'kn_windows_wide.parquet'],
+                                  max_objects=2000),
+        ], ignore_index=True)
         loaders, normalization = build_dataloaders(long_df, batch_size=32)
         batch = next(iter(loaders['train']))   # replaces make_synthetic_batch()
     """
