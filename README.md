@@ -33,13 +33,12 @@ are needed), plain `pip install -e .` works: galsim is imported lazily and only 
 
 Large files never live in git. There are two kinds:
 
-- **DVC-tracked artifacts** (`*.dvc` pointer files): `lanl_spectra.parquet`,
-  `hourglass_photometry.parquet`, and the superseded `kilonova_windows_*.hdf5` (June 2026 KN class,
-  deleted locally on 2026-07-30 — `kn_windows_*.parquet` replaces it). Get them with `dvc pull`
-  (remote: `/Volumes/Elements/dvc-kilonova`, mount the drive first); publish new versions with
-  `dvc add <file> && dvc push`.
+- **DVC-tracked artifacts** (`*.dvc` pointer files): `lanl_spectra.parquet` and
+  `hourglass_photometry.parquet`. Get them with `dvc pull` (remote: `~/Dropbox/Kilonova/dvc-kilonova`,
+  same path on both machines); publish new versions with `dvc add <file> && dvc push` — and give the
+  Dropbox daemon time to upload before pulling from elsewhere.
 - **External sources** (documented, not tracked): the OpenUniverse snana files on
-  `/Volumes/T7/openuniverse2025` (see `data/openuniverse/download_openuniverse_snana.sh`) and
+  `~/Dropbox/Kilonova/openuniverse2025` (see `data/openuniverse/download_openuniverse_snana.sh`) and
   the raw LANL grid `kn_sim_cube_v1` on the Elements drive.
 
 All locations are configured in [`configs/paths.yaml`](configs/paths.yaml) — nothing is

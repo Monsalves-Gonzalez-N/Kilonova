@@ -2,7 +2,9 @@
 # repository root; absolute paths point at external volumes that must be mounted.
 # Any field can be overridden with KN_<FIELD> (e.g. KN_LANL_SPECTRA) or a CLI flag.
 
-openuniverse_source: /Volumes/T7/openuniverse2025
+# Migrado del T7 a Dropbox el 2026-07-31. El ~ vale en las dos maquinas (lo expande _resolve), asi
+# que esta linea ya no depende del punto de montaje de un disco externo.
+openuniverse_source: ~/Dropbox/Kilonova/openuniverse2025
 openuniverse_hdf5: data/openuniverse/snana_10307_full.hdf5
 openuniverse_catalog: data/openuniverse/snana_10307.parquet
 lanl_spectra: data/dust_generation/lanl_spectra.parquet

@@ -39,10 +39,14 @@ local: sus resultados están en las tablas de más abajo, que es lo único que h
 | `kilonova_windows_{deep,wide}.hdf5` | clase KN de junio, con los tres bugs y sin factor angular |
 
 Los `.npz` eran **caché derivada**, no fuente: `training/openuniverse_data.py` los reconstruye
-cuando el fichero no existe, y `normalization.json` se reajusta en el mismo paso. Los `.hdf5` sí
-eran fuente para el training y estaban en DVC: sus `.dvc` **siguen commiteados**, así que un
-`dvc pull` los recupera desde el remote del Elements (Mac) — desde esta máquina el remote no es
-alcanzable, así que si esa copia no existe, no existen.
+cuando el fichero no existe, y `normalization.json` se reajusta en el mismo paso.
+
+Los `kilonova_windows_*.hdf5` sí eran fuente para el training y estaban en DVC. El **2026-07-31 se
+borraron también sus `.dvc`**, junto con el remote `elements` que era lo único que los alojaba: la
+migración a Dropbox no los llevó, y mantener un remote entero por una generación con tres bugs de
+fotometría y sin factor angular solo confundía. Ya no hay forma de recuperarlos con `dvc pull`; la
+generación viva es `kn_windows_{deep,wide}.parquet`. Los bytes siguen físicamente en el disco
+Elements si alguna vez hiciera falta una arqueología, pero nada del repo apunta ahí.
 
 Fuera de este directorio se borraron en la misma pasada
 `data/dust_generation/lanl_extinguished_photometry.parquet` (17 GB) y

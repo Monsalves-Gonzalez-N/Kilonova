@@ -1,11 +1,17 @@
 [core]
-    remote = t7
-# El T7 es el remote de trabajo desde 2026-07-30. La url de aqui es la ruta del Mac; en Linux el
-# mismo disco monta en /media/nicolas/T7, asi que esa maquina la sobreescribe en .dvc/config.local
-# (gitignored), que es donde va todo lo que depende de la maquina.
+    remote = dropbox
+# Dropbox es el remote de trabajo desde 2026-07-31. A diferencia del T7 no necesita override por
+# maquina: la carpeta cuelga del home en las dos (~/Dropbox en Mac y en Linux) y dvc expande el ~,
+# asi que esta url tracked vale tal cual en ambas. Ojo: un dvc push aqui no esta replicado hasta
+# que el demonio de Dropbox termine de subirlo.
+['remote "dropbox"']
+    url = ~/Dropbox/Kilonova/dvc-kilonova
+# Remote anterior (2026-07-30). Se conserva como respaldo frio: tiene lo mismo que dropbox, copiado
+# el 2026-07-31. La url de aqui es la ruta del Mac; en Linux el mismo disco monta en
+# /media/nicolas/T7, sobreescrito en .dvc/config.local (gitignored).
 ['remote "t7"']
     url = /Volumes/T7/dvc-kilonova
-# Remote anterior. Se conserva porque es el unico sitio donde siguen los kilonova_windows_*.hdf5
-# borrados en la limpieza del 2026-07-30 (sus .dvc siguen commiteados).
-['remote "elements"']
-    url = /Volumes/Elements/dvc-kilonova
+# El remote 'elements' se elimino el 2026-07-31. Solo lo sostenia el par kilonova_windows_*.hdf5
+# (clase KN de junio: tres bugs de fotometria y sin factor angular), superado por
+# kn_windows_{deep,wide}.parquet; sus .dvc se borraron con el, asi que ya nada apunta al disco.
+# El raw grid kn_sim_cube_v1 sigue ahi, pero eso es lanl_grid_dir en paths.yaml, no un remote DVC.
