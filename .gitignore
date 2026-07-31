@@ -66,3 +66,7 @@ training/lightning_logs/
 .pytest_cache/
 .ruff_cache/
 src/kilonova.egg-info/
+
+# CLAUDE.md y la memoria de Claude viven en Dropbox (~/Dropbox/Kilonova), compartidos entre
+# las dos maquinas. El symlink NO se versiona: su destino absoluto difiere entre Linux y el Mac.
+CLAUDE.md
