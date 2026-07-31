@@ -1,0 +1,59 @@
+DETECTABILIDAD KN vs CHASE ET AL. 2021 — rutas y comandos
+=========================================================
+
+REGENERAR TODO (~4 min)
+-----------------------
+cd /home/nicolas/nico/git/Kilonova
+/home/nicolas/.local/share/mamba/envs/kn_class/bin/python notebooks/validation/kn_detectability_vs_chase.py
+
+
+ABRIR LAS FIGURAS
+-----------------
+eog /home/nicolas/nico/git/Kilonova/data/openuniverse/detectability_vs_chase/mapas/*.png
+
+
+CODIGO Y DOCUMENTACION
+----------------------
+notebooks/validation/kn_detectability_vs_chase.py     el analisis completo
+docs/kn_detectability_vs_chase.md                     resultados y limitaciones
+docs/plan_kn_widefield_repro.md                       metodologia del paper
+                                                      (OJO: su z5%=0.79 es incorrecto, ver abajo)
+
+
+FIGURAS — data/openuniverse/detectability_vs_chase/
+---------------------------------------------------
+mapas/Roman{R,Z,Y,J,H,F}_{deep,wide}.png       mapas t x z por banda, estilo del paper
+mapas/RomanH_{deep,wide}_forappendix.png       igual con el eje z hasta 1.0
+mapas/RomanH_{md,mw}_{0.1,0.01,0.001}_*.png    cortes de masa fija (Fig. 5 del paper)
+mapas/RomanH_mw_X_md_X_*.png                   masa eyecta total fija (Fig. 7)
+detectabilidad_vs_redshift.png                 fraccion detectada en cualquier banda
+criterio_paper_vs_pipeline.png                 m<m_lim  vs  S/N>=5
+diagnosticos.png                               profundidad alcanzada + validez del eje de fase
+bordes_de_detectabilidad.csv                   z95/z50/z05 por tier, banda y criterio
+
+
+RESULTADO — Roman/H, grilla completa
+------------------------------------
+contorno      Chase+21     deep      wide
+  0.95          ~0.09      ~0.095    0.088
+  0.50           0.22       0.215    0.201
+  0.05          ~0.48       0.477    0.454
+
+CORRECCION: docs/plan_kn_widefield_repro.md anota z5% = 0.79 para Roman/H. Ese valor NO
+concuerda con la figura del propio paper, donde el contorno 0.05 llega a ~0.48. El 0.48 es
+el numero correcto a comparar, y es el que reproducimos.
+
+
+CORTES DE MASA — pico del contorno 0.5, tier deep
+-------------------------------------------------
+corte                  Chase+21              nuestro
+m_dyn  = 0.1   M_sun   0.31 (pico a 3 d)     ~0.31 (pico a 3 d)
+m_wind = 0.1   M_sun   0.37                  ~0.365
+m_dyn  = 0.001 M_sun   0.16                  ~0.147
+
+
+DATOS DE ENTRADA
+----------------
+data/openuniverse/kn_windows_{deep,wide}.parquet   curvas KN que entrenaron el transformer
+data/lanl_catalog.parquet                          masas por simulation_id (cortes de masa)
+params.yaml : kilonova_windows                     100 nodos de z, 10000 realizaciones por nodo
