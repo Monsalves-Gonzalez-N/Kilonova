@@ -43,6 +43,7 @@ Uso: python notebooks/validation/kn_detectability_vs_chase.py [--output-dir DIR]
 import argparse
 from pathlib import Path
 
+import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -78,6 +79,10 @@ MAP_PHASE_EDGES = np.geomspace(PHASE_MIN_DAYS, PHASE_MAX_DAYS, 41)
 # alza por fluctuaciones. Con bins de factor 2 el menos poblado recibe ~1000 y el sesgo desaparece.
 STATISTIC_PHASE_EDGES = np.geomspace(0.5, 16.0, 6)
 CONTOUR_LEVELS = (0.05, 0.5, 0.95)
+# Trazo de cada nivel. Se dibujan en blanco con un reborde oscuro: el gris claro de antes se perdia
+# sobre el amarillo saturado justo donde vive el contorno de 0.95.
+CONTOUR_DASHES = {0.05: (0, (6, 3)), 0.5: (0, (1, 2.2)), 0.95: (0, (7, 2.5, 1.5, 2.5))}
+CONTOUR_OUTLINE = [path_effects.withStroke(linewidth=4.4, foreground="0.12", alpha=0.85)]
 
 # Tipografia serif como las figuras de referencia.
 plt.rcParams.update({"font.family": "serif", "mathtext.fontset": "dejavuserif"})
@@ -164,7 +169,23 @@ def redshift_at_fraction(redshifts, fractions, level):
     )
 
 
-def detectability_map(frame, band, criterion, tier, phase_edges=MAP_PHASE_EDGES, grid_fraction=1.0):
+def detectability_edge(redshifts, fractions, level):
+    """z del borde de detectabilidad en cada columna de fase: el ultimo cruce del nivel a lo largo
+    de z (`fractions` es n_z x n_fase).
+
+    Sustituye a `contour` sobre el campo 2D. La fraccion decrece con z, asi que el borde ES una
+    curva z(t) de un solo valor; `contour` no lo sabe y, alrededor de 0.95, donde el ruido Monte
+    Carlo de un campo casi saturado cruza el nivel muchas veces, devolvia una maraña de islas en vez
+    de una linea. Aqui cada columna aporta un punto y el resultado es una linea limpia; las columnas
+    que no alcanzan el nivel quedan en NaN y cortan el trazo, que es lo correcto."""
+    return np.array(
+        [redshift_at_fraction(redshifts, fractions[:, column], level) for column in range(fractions.shape[1])]
+    )
+
+
+def detectability_map(
+    frame, band, criterion, tier, phase_edges=MAP_PHASE_EDGES, grid_fraction=1.0, redshift_nodes=None
+):
     """Fraccion detectable en (fase desde el merger) x (z) para una banda.
 
     `criterion` es 'paper' (mag_true < Tabla 1 de Chase) o 'pipeline' (S/N >= 5). Devuelve
@@ -174,7 +195,11 @@ def detectability_map(frame, band, criterion, tier, phase_edges=MAP_PHASE_EDGES,
     (1 para la grilla completa, 180/900 para una masa fija, 36/900 para masa eyecta total fija). Las
     realizaciones se sortearon uniformemente sobre la grilla, asi que solo esa fraccion de las 10 000
     por nodo de z pertenece al corte, y el denominador debe escalarse: sin esto un panel de masa fija
-    parece cinco veces menos detectable de lo que es."""
+    parece cinco veces menos detectable de lo que es.
+
+    `redshift_nodes` fija la grilla de z. Sin el, un corte de masa la deduce de sus propias filas y
+    se queda en el ultimo nodo con alguna deteccion, dejando el panel cortado en blanco justo donde
+    la fraccion ya es cero -- que es informacion, no ausencia de ella."""
     band_rows = frame[frame.band == band].copy()
     if criterion == "paper":
         hit = band_rows.mag_true < CHASE_LIMITING_MAGNITUDE[band]
@@ -186,7 +211,7 @@ def detectability_map(frame, band, criterion, tier, phase_edges=MAP_PHASE_EDGES,
         visits_per_realization = 1.0 if band == ANCHOR_BAND[tier] else 0.5
     band_rows = band_rows[np.asarray(hit) & np.isfinite(band_rows.mag_true)]
 
-    redshifts = np.sort(frame.z_CMB.unique())
+    redshifts = np.sort(frame.z_CMB.unique()) if redshift_nodes is None else np.asarray(redshift_nodes)
     phase = band_rows.explosion_offset_days + band_rows.days_since_detection
     counts, _, _ = np.histogram2d(
         band_rows.z_CMB, phase, bins=[np.append(redshifts, redshifts[-1] * 1.001), phase_edges]
@@ -267,7 +292,15 @@ def luminosity_distance_ticks(redshift_limits, cosmology=CHASE_COSMOLOGY):
 
 
 def figure_paper_style(
-    frame, tier, band, criterion, output_path, redshift_max=1.0, subtitle=None, grid_fraction=1.0
+    frame,
+    tier,
+    band,
+    criterion,
+    output_path,
+    redshift_max=1.0,
+    subtitle=None,
+    grid_fraction=1.0,
+    redshift_nodes=None,
 ):
     """Un panel al estilo de las figuras de referencia (Chase+21 Fig. 3/5/7).
 
@@ -281,7 +314,7 @@ def figure_paper_style(
     de Poisson domina la lectura. Los numeros publicados (z50%/z95%) NO salen de este campo
     suavizado sino de `per_band_fraction_vs_redshift`, que no aplica ningun filtro."""
     redshifts, phases, fractions = detectability_map(
-        frame, band, criterion, tier, grid_fraction=grid_fraction
+        frame, band, criterion, tier, grid_fraction=grid_fraction, redshift_nodes=redshift_nodes
     )
     smoothed = gaussian_filter(fractions, sigma=1.2, mode="nearest")
 
@@ -294,17 +327,16 @@ def figure_paper_style(
 
     figure, axes = plt.subplots(figsize=(6.4, 4.4))
     mesh = axes.pcolormesh(phases, redshifts, smoothed, cmap="inferno", vmin=0, vmax=1, shading="gouraud")
-    levels = [level for level in CONTOUR_LEVELS if smoothed.max() > level]
-    if levels:
-        styles = {0.05: (0, (6, 3)), 0.5: (0, (1, 2.2)), 0.95: (0, (7, 2.5, 1.5, 2.5))}
-        axes.contour(
+    for level in CONTOUR_LEVELS:
+        if smoothed.max() <= level:
+            continue
+        axes.plot(
             phases,
-            redshifts,
-            smoothed,
-            levels=levels,
-            colors="0.82",
-            linewidths=2.6,
-            linestyles=[styles[level] for level in levels],
+            detectability_edge(redshifts, smoothed, level),
+            color="white",
+            lw=2.2,
+            ls=CONTOUR_DASHES[level],
+            path_effects=CONTOUR_OUTLINE,
         )
     axes.set_xscale("log")
     axes.set_xlim(0.25, PHASE_MAX_DAYS)
@@ -326,11 +358,19 @@ def figure_paper_style(
     distance_axes.set_ylabel("Luminosity Distance [Gpc]", fontsize=12)
     distance_axes.tick_params(labelsize=11)
 
+    # Handles largos y finos: con el trazo grueso y el handle corto de antes los tres patrones de
+    # guiones se veian como la misma barra gris y la leyenda no distinguia un nivel de otro.
     handles = [
-        Line2D([], [], color="0.5", lw=2.6, ls=style)
-        for style in ((0, (6, 3)), (0, (1, 2.2)), (0, (7, 2.5, 1.5, 2.5)))
+        Line2D([], [], color="0.15", lw=1.8, ls=CONTOUR_DASHES[level]) for level in CONTOUR_LEVELS
     ]
-    axes.legend(handles, ["0.05", "0.5", "0.95"], fontsize=10, loc="upper right", framealpha=0.75)
+    axes.legend(
+        handles,
+        [f"{level:g}" for level in CONTOUR_LEVELS],
+        fontsize=10,
+        loc="upper right",
+        framealpha=0.85,
+        handlelength=4.0,
+    )
 
     colorbar = figure.colorbar(mesh, ax=[axes, distance_axes], fraction=0.045, pad=0.14)
     colorbar.set_label("Fraction Detectable", fontsize=12)
@@ -479,6 +519,7 @@ def main():
     maps_dir = figures_dir / "mapas"
     maps_dir.mkdir(exist_ok=True)
     for tier, frame in filtered.items():
+        redshift_nodes = np.sort(frame.z_CMB.unique())
         bands = [band for band in BANDS_BY_WAVELENGTH if band in set(frame.band)]
         for band in bands:
             figure_paper_style(frame, tier, band, "paper", maps_dir / f"Roman{band[0]}_{tier}.png")
@@ -499,6 +540,7 @@ def main():
                     maps_dir / f"RomanH_{prefix}_{mass:g}_{tier}.png",
                     subtitle=f"$m_{{{'dyn' if prefix == 'md' else 'wind'}}}$ = {mass:g} $M_\\odot$",
                     grid_fraction=selected.mean(),
+                    redshift_nodes=redshift_nodes,
                 )
         # Masa eyecta total fija (Fig. 7): el unico par (dyn, wind) de la grilla que suma el total.
         for mass in (0.1, 0.001):
@@ -511,6 +553,7 @@ def main():
                 maps_dir / f"RomanH_mw_{mass:g}_md_{mass:g}_{tier}.png",
                 subtitle=f"$m_{{ej}}$ = {2 * mass:g} $M_\\odot$ (dyn = wind = {mass:g})",
                 grid_fraction=selected.mean(),
+                redshift_nodes=redshift_nodes,
             )
 
     summary = figure_criteria(filtered, figures_dir / "criterio_paper_vs_pipeline.png")
