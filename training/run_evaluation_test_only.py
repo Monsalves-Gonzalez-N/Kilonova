@@ -26,7 +26,17 @@ from sklearn.metrics import (
 from torch.utils.data import DataLoader
 from train_lightning import MODEL_INPUT_KEYS, LitKilonova
 
-DATA_DIR = "/Users/bhianca/Kilonova/data/openuniverse"
+
+def first_existing(candidates, default):
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    return default
+
+
+# Resolved against the working directory, so this runs from either machine; the absolute path it
+# replaces only existed on the Mac.
+DATA_DIR = first_existing(["data/openuniverse", "../data/openuniverse"], "../data/openuniverse")
 CHECKPOINT = "checkpoints/kilonova_transformer-soup.ckpt"
 PLOTS_DIR = "plots"
 os.makedirs(PLOTS_DIR, exist_ok=True)
