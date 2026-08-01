@@ -1,6 +1,6 @@
 """Standalone evaluation on the test-only token cache (no train/val data available locally).
 
-Loads `openuniverse_tokens_test.npz` directly (already the full test split, 93,119 objects)
+Loads `openuniverse_tokens_test.npz` directly (already the full test split, 153,661 objects)
 and the normalization constants fit on train (`normalization.json`), instead of going through
 `build_dataloaders`, which needs the train/val source parquet/hdf5 files.
 """

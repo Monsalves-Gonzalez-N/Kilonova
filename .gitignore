@@ -51,6 +51,8 @@ data/openuniverse/*.npz.*
 data/openuniverse/normalization.json.stale-*
 # Cache de tokens completa (~800 MB): derivada, la reconstruye training/openuniverse_data.py
 data/openuniverse/openuniverse_tokens.npz
+# Cache de tokens solo-test (65 MB): derivada del cache completo, la recorta el split de test
+data/openuniverse/openuniverse_tokens_test.npz
 
 # Generated figure PDFs, reference papers and local caches
 data/openuniverse/*.pdf
