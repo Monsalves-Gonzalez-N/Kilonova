@@ -57,8 +57,10 @@ from kilonova.config import load_paths
 CHASE_LIMITING_MAGNITUDE = {
     "R062": 26.2, "Z087": 25.7, "Y106": 25.6, "J129": 25.5, "H158": 25.4, "F184": 24.9,
 }
-# Valores publicados a igualar (Roman/H, grilla completa).
-CHASE_ROMAN_H = {"z95": 0.10, "z50": 0.22, "z05": 0.79}
+# Valores publicados a igualar (Roman/H, grilla completa). z05 corregido a 0.48: el 0.79 de
+# `docs/plan_kn_widefield_repro.md` no concuerda con la figura del propio paper, donde el contorno
+# 0.05 llega a ~0.48 (ver `docs/kn_detectability_vs_chase.md`).
+CHASE_ROMAN_H = {"z95": 0.10, "z50": 0.22, "z05": 0.48}
 # Planck 2020 tal como lo usa el paper -- no los defaults de Planck18 de astropy.
 CHASE_COSMOLOGY = FlatLambdaCDM(H0=67.4, Om0=0.315)
 
