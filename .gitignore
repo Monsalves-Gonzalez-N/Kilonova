@@ -64,6 +64,12 @@ docs/papers/
 training/checkpoints/
 training/lightning_logs/
 
+# Subproductos de compilacion de LaTeX (el .tex y el .pdf si se versionan)
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.toc
+
 # Tool caches
 .pytest_cache/
 .ruff_cache/

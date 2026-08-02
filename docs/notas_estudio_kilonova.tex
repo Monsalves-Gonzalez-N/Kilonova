@@ -1,0 +1,1246 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\decimalpoint
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\Msun}{M_\odot}
+\newcommand{\eminus}{e^{-}}
+
+\definecolor{boxgray}{gray}{0.95}
+% El contenido se compone primero en una caja (lrbox) y solo despues se colorea. La forma
+% anterior dejaba abierto el argumento de \colorbox entre \begin y \end del entorno, lo que
+% ya no compila con el kernel actual de LaTeX y ademas prohibia tablas y display math dentro.
+\newsavebox{\examenbox}
+\newlength{\examenpad}
+\setlength{\examenpad}{8pt}
+\newenvironment{examen}
+  {\par\medskip\noindent
+   \begin{lrbox}{\examenbox}%
+   \begin{minipage}{\dimexpr\linewidth-2\examenpad}\small}
+  {\end{minipage}%
+   \end{lrbox}%
+   {\setlength{\fboxsep}{\examenpad}\colorbox{boxgray}{\usebox{\examenbox}}}%
+   \par\medskip}
+
+\title{\textbf{Clasificación de kilonovas en Roman}\\[2mm]
+\large Notas de estudio: datos, fotometría, grilla LANL y transformer}
+\author{Proyecto Kilonova --- repositorio \code{Kilonova}}
+\date{1 de agosto de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent Apuntes autocontenidos de todo lo construido hasta ahora: de dónde salen los datos
+(OpenUniverse/SNANA y la grilla LANL), con qué ecuaciones se les pone error fotométrico, cómo se
+recortan las ventanas tempranas, cómo se tokenizan y qué arquitectura de transformer las clasifica.
+Cada sección cierra con las magnitudes numéricas concretas que usa el pipeline, para poder
+reproducirlas de memoria.
+\end{abstract}
+
+\tableofcontents
+\bigskip
+\hrule
+
+\section{Panorama}
+
+\subsection{Objetivo}
+Clasificar \textbf{kilonovas (KN) frente a contaminantes} (SN, TDE, SLSN, PISN) en las curvas de luz
+del \emph{High Latitude Time Domain Survey} (HLTDS) del Roman Space Telescope, usando solo las
+\textbf{primeras épocas} de la curva. El criterio operativo es \textbf{recall sobre precisión}: la
+meta es aislar candidatos para seguimiento espectroscópico, y el umbral se calibra contra un
+presupuesto de seguimiento, no contra la prevalencia real.
+
+\subsection{Cadena de datos}
+\begin{center}
+\begin{minipage}{0.94\linewidth}
+\small
+\begin{verbatim}
+LANL .dat (900 sims x 54 angulos)
+   --kn-cache-lanl-->  lanl_spectra.parquet   (espectros rest-frame, 1024 lambda)
+   --kn-kilonova-windows-->  kn_windows_{deep,wide}.parquet     [clase KN]
+
+OpenUniverse snana (hdf5 SED + mags verdaderas, parquet cabecera)
+   --kn-run-openuniverse-->  early_windows_{deep,wide}.parquet  [clase other]
+
+   ambos --> openuniverse_data.py (tokens) --> KilonovaTransformer --> {other, KN}
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+Las dos ramas comparten \textbf{exactamente la misma} receta de ruido, cadencia y lógica de
+ventana (\code{build\_window\_from\_model} en \code{src/kilonova/simulation/early\_windows.py}).
+Eso es deliberado: si las recetas difirieran, el clasificador aprendería ``mi pipeline vs.\ el
+suyo'' en vez de ``KN vs.\ no KN'' (\emph{injection bias}).
+
+\subsection{Qué NO se usa}
+\begin{itemize}[nosep]
+  \item \textbf{Hourglass} (Rose et al.\ 2025) ya no genera datos de entrenamiento; sobrevive solo
+        como \emph{fuente de la receta de ruido} y como validación de la misma.
+  \item El plan original de dos etapas (Hourglass $\to$ OpenUniverse) está superado: se entrena
+        \emph{solo} con OpenUniverse.
+  \item La construcción de \emph{matched twins} (una KN gemela por cada contaminante de bajo $z$)
+        se descartó: las KN de LANL son demasiado débiles para tener análogas entre los
+        contaminantes de OpenUniverse. Las KN son ahora una población independiente sobre una
+        grilla de $z$.
+  \item \code{simulation/extinction.py} y el CLI \code{kn-extinguish}: es una rama paralela que
+        \emph{no} genera los datos de entrenamiento (sección \ref{sec:cadena-lanl}). Ni tampoco
+        \code{src/kilonova/datasets/openuniverse.py}, un segundo tokenizador divergente ---
+        el que entrenó el modelo es \code{training/openuniverse\_data.py}.
+  \item La cadencia y las exposiciones propias de OpenUniverse: del catálogo solo se toman las
+        curvas de luz verdaderas, y encima se monta la cadencia HLTDS de este proyecto.
+\end{itemize}
+
+\section{El observatorio Roman}
+
+\subsection{La idea en una frase}
+El \emph{Nancy Grace Roman Space Telescope} es, en resolución y sensibilidad, \textbf{un Hubble};
+la diferencia es el \textbf{campo de visión}, unas \textbf{200 veces} el del infrarrojo de Hubble.
+Mismo espejo primario de \textbf{2.4 m} (de hecho es un telescopio AFTA donado a la NASA), misma
+calidad de imagen, pero un plano focal enorme detrás. Eso convierte la astronomía de ``apuntar a un
+objeto'' en astronomía de \emph{survey}: es lo que hace posible que exista una muestra estadística
+de transientes como la que usamos aquí.
+
+\begin{center}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+Espejo primario & 2.4 m de diámetro (el mismo que Hubble) \\
+Apertura efectiva & 2.36 m de diámetro con obstrucción central 0.32; $A = 37\,570\ \text{cm}^2 =
+   3.757\ \text{m}^2$ (el anillo puro daría 3.93 m$^2$: galsim descuenta además los \emph{struts}) \\
+Campo de visión (WFI) & caja $0.8^\circ \times 0.4^\circ = 0.32$ deg$^2$; \textbf{área activa
+   0.281 deg$^2$} con los huecos entre detectores ya descontados \\
+Plano focal & 18 detectores Teledyne H4RG-10 de $4096\times4096$ px (4088 activos)
+   $\Rightarrow$ $\sim$\textbf{300 megapíxeles} \\
+Escala de placa & \textbf{0.11 arcsec/píxel} (píxel físico de 10 $\mu$m) \\
+PSF & FWHM 0.058$''$ en F062 a 0.169$''$ en F213 \\
+Rango espectral & 0.48--2.3 $\mu$m (WFI); coronógrafo aparte en 0.4--1.0 $\mu$m \\
+Temperatura & detectores a 89.5 K, enfriamiento pasivo por radiadores \\
+Órbita & punto de Lagrange \textbf{L2} Sol--Tierra \\
+Misión & 5 años nominales (objetivo 10); lanzamiento 30 de agosto de 2026 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{La comparación con Hubble, hecha a mano.} WFC3/IR tiene un campo de
+$123''\times136'' = 4.65\ \text{arcmin}^2 = 1.29\times10^{-3}\ \text{deg}^2$. Entonces
+\begin{equation}
+\frac{0.281}{1.29\times10^{-3}} \approx 218
+\end{equation}
+\paragraph{Ojo con la cifra que se cita.} La NASA dice públicamente ``\emph{at least 100 times larger
+than Hubble's}'', sin nombrar instrumento; no dice 200. Los dos números son compatibles y la
+diferencia es contra qué cámara de Hubble se compare:
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+referencia & FOV & Roman/HST \\
+\midrule
+WFC3/IR ($123''\times136''$) & 4.65 arcmin$^2$ & \textbf{218} \\
+ACS/WFC ($202''\times202''$, la cámara de campo más ancho de HST) & 11.33 arcmin$^2$ & \textbf{89} \\
+\bottomrule
+\end{tabular}
+\end{center}
+El ``al menos 100'' de la NASA es un piso conservador medido contra ACS/WFC; el 200 es la comparación
+en el infrarrojo, que es la relevante aquí. \textbf{Citar cuál de las dos se usa.} La sensibilidad
+por exposición es parecida porque el área colectora es la misma; lo que cambia es \emph{cuánto cielo}
+se cubre por unidad de tiempo.
+
+\subsection{Qué números del observatorio entran en nuestras ecuaciones}
+No todo el observatorio importa para este trabajo. Los que aparecen literalmente en el código
+(vía \code{galsim.roman}) son:
+
+\begin{center}
+\begin{tabular}{llr}
+\toprule
+constante & dónde entra & valor \\
+\midrule
+\code{collecting\_area} & flujo de la fuente, $F = t_{\rm exp}A\,10^{-0.4(m-\rm ZP)}$ & 37\,570 cm$^2$ \\
+\code{pixel\_scale} & conversión del cielo a e$^-$/píxel & 0.11 $''$/px \\
+\code{dark\_current} & término $B_{\rm dark}$ del fondo & 0.015 e$^-$/s/px \\
+\code{thermal\_backgrounds} & término $B_{\rm thermal}$ & 0.04 (H158), 0.17 (F184) e$^-$/s/px \\
+\code{getSkyLevel} & término $B_{\rm sky}$ (zodiacal, depende del campo) & --- \\
+\code{read\_noise} & \emph{no} se usa: lo sustituye la Ec.\ \eqref{eq:read} & (8.5 e$^-$ estático) \\
+\code{getPSF} & \emph{no} se usa: NEA tabulada de Rose+2025 & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Un detalle que sí importa: Roman está \emph{submuestreado}.} La PSF tiene FWHM
+$0.058''$ en el azul frente a un píxel de $0.11''$: menos de un píxel por FWHM. Por eso el NEA
+--- el número efectivo de píxeles que pesa el fondo en la Ec.\ \eqref{eq:ccd} --- es tan pequeño
+(5.6 px en R062) y tan sensible al modelo de PSF que se use; y por eso importa la decisión de
+tabularlo en vez de calcularlo (sección \ref{sec:nea}).
+
+\subsection{Filtros de la WFI}
+La nomenclatura oficial es \code{F062}, \code{F087}, \dots; en este proyecto (y en
+\code{galsim.roman}) se usa \code{R062}, \code{Z087}, \code{Y106}, \code{J129}, \code{H158},
+\code{F184}, con la letra del nombre clásico de la banda. Son el mismo filtro.
+
+\begin{center}
+\begin{tabular}{llrrr}
+\toprule
+proyecto & oficial & rango [$\mu$m] & centro [$\mu$m] & ZP AB (galsim) \\
+\midrule
+R062 & F062 & 0.48--0.76 & 0.620 & 15.297 \\
+Z087 & F087 & 0.76--0.98 & 0.869 & 14.964 \\
+Y106 & F106 & 0.93--1.19 & 1.060 & 15.024 \\
+J129 & F129 & 1.13--1.45 & 1.293 & 15.040 \\
+H158 & F158 & 1.38--1.77 & 1.577 & 15.074 \\
+F184 & F184 & 1.68--2.00 & 1.842 & 14.622 \\
+(K213) & F213 & 1.95--2.30 & 2.125 & 14.579 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{K213} existe en el instrumento pero no se usa en el HLTDS: su fondo térmico es
+4.52 e$^-$/s/px, un \textbf{factor 27} por encima de F184 (0.17), y lo haría inútil para fotometría
+profunda. Existen además un grism (G150, $R\sim600$) y un prisma (P127, $R = 80$--180) que este
+proyecto no toca.
+
+\begin{examen}
+\textbf{¿Por qué Roman y no Hubble/JWST para kilonovas?} Porque el problema es de
+\emph{estadística}, no de profundidad: las KN son raras, rápidas y rojas. Se necesita (i) infrarrojo
+--- la KN se enrojece en días por los lantánidos ---, (ii) profundidad de espacio, y (iii) mucho
+cielo con cadencia de días. Hubble y JWST tienen (i) y (ii) pero no (iii); los surveys terrestres
+tienen (iii) pero no (i)+(ii). Roman es la primera instalación con las tres.
+\end{examen}
+
+\section{Roman HLTDS: filtros, tiers y cadencia}
+
+\subsection{Bandas y tiers}
+Seis filtros de la WFI participan en el HLTDS (\code{K213} queda fuera). El survey tiene dos
+\emph{tiers}: \textbf{wide} (más área, menos profundidad) y \textbf{deep}.
+
+\begin{center}
+\begin{tabular}{lrrrrrr}
+\toprule
+$t_{\rm exp}$ por época [s] & R062 & Z087 & Y106 & J129 & H158 & F184 \\
+\midrule
+wide & 60 & 85 & 95 & 152 & 294 & --- \\
+deep & --- & 193 & 294 & 307 & 420 & 1636 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Índices de banda del modelo: \code{R}=0, \code{Z}=1, \code{Y}=2, \code{J}=3, \code{H}=4,
+\code{F}=5. Los dos tiers se entrenan en un \emph{único} modelo sobre este vocabulario de 6 bandas;
+una banda que un tier no observa simplemente nunca genera token.
+
+Campos reales del HLTDS (importan porque \code{getSkyLevel} calcula la luz zodiacal a partir de la
+latitud eclíptica del campo): ELAIS-N1 $(242.504, +54.510)$ hace \emph{deep} y \emph{wide};
+EDFS\_a $(58.900, -49.320)$ solo \emph{deep}; EDFS\_b $(63.600, -47.600)$ solo \emph{wide}.
+\textbf{El pipeline no promedia sobre ellos}: \code{field\_center\_for\_tier} sortea uno con
+\code{FIELD\_SEED}$=0$, y ese sorteo sale siempre \textbf{EDFS\_a para deep y EDFS\_b para wide}.
+ELAIS-N1 está en la tabla pero nunca se usa: todos los fondos de estas notas son de esos dos campos.
+
+\subsection{Cadencia}
+Visitas cada $\Delta t_{\rm cad} = 5$ d. En cada visita se observa la \textbf{banda ancla} (la más
+azul del tier: R062 en wide, Z087 en deep) más \textbf{dos} de las otras cuatro. Las cuatro
+no-ancla se parten en dos \emph{pares consecutivos} en longitud de onda: las dos azules en visitas
+pares, las dos rojas en visitas impares. Resultado:
+\[
+\text{wide: } \underbrace{\text{RZY}}_{\text{visita par}} \to \underbrace{\text{RJH}}_{\text{impar}} \to \text{RZY} \to \cdots
+\qquad
+\text{deep: } \text{ZYJ} \to \text{ZHF} \to \text{ZYJ} \to \cdots
+\]
+Cada banda no-ancla se observa una visita sí y otra no; el ancla, todas.
+
+\begin{examen}
+\textbf{Trampa.} Agrupar las bandas por \emph{paridad del índice} en vez de por pares consecutivos
+da RZJ/RYH y ZYH/ZJF: los mismos conteos por banda, pero el par de filtros equivocado en cada
+visita y por tanto \emph{líneas de base de color equivocadas}. Los conteos por banda no fijan la
+regla; el test del repositorio asserta las secuencias literales.
+\end{examen}
+
+\section{OpenUniverse (SNANA): los contaminantes}
+
+\subsection{Qué es y de dónde sale}
+OpenUniverse2024 es la simulación oficial de Roman$+$Rubin. De ella se usan \textbf{solo los
+catálogos SNANA de transientes}, no las imágenes ($\sim$400 TB). Se bajan del mirror HTTPS público
+de \code{s3://nasa-irsa-simulations/openuniverse2024/roman/full/roman\_rubin\_cats\_v1.1.2\_faint},
+33 healpix, dos ficheros por healpix:
+\begin{itemize}[nosep]
+  \item \code{snana\_<healpix>.parquet} --- cabecera por objeto: \code{id}, \code{gentype},
+        \code{z\_CMB}, \code{peak\_mjd}, \code{peak\_mag\_*}. $\sim$4 MB c/u.
+  \item \code{snana\_<healpix>.hdf5} --- grilla de SED y \textbf{magnitudes AB verdaderas por banda}
+        en función del MJD. $\sim$16 GB c/u, $\sim$530 GB en total.
+\end{itemize}
+
+Punto clave: las magnitudes de OpenUniverse \textbf{ya traen la K-corrección, la atenuación por
+distancia y la extinción del host} incorporadas por SNANA. Lo que \emph{no} traen es error
+fotométrico. Nuestro pipeline solo les aplica (i) la cadencia, (ii) la receta de ruido y (iii) la
+ventana temprana. Por eso ningún arreglo de la fotometría sintética toca a los contaminantes: esa
+fotometría solo existe en la rama de las KN, que parte de espectros LANL en reposo.
+
+\paragraph{Dos precisiones que hay que saber decir.} Primera: del hdf5 se leen \emph{solo}
+\code{mjd} y las magnitudes verdaderas por banda. \textbf{La cadencia y los tiempos de exposición
+propios de OpenUniverse no se usan en absoluto}; encima de esas curvas verdaderas el pipeline monta
+su propia grilla de visitas HLTDS de dos tiers. Segunda: la extinción de la Vía Láctea \textbf{no}
+está aplicada --- el propio catálogo lo dice, \code{mw\_extinction\_applied} vale \code{False} y
+\code{mw\_EBV}$=0$ en los 63\,151 objetos. El cuadro real es:
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+ & extinción de host & extinción Vía Láctea \\
+\midrule
+contaminantes OpenUniverse & \textbf{sí} (dentro del modelo SED) & no \\
+kilonovas LANL             & \textbf{no} & no \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent La asimetría residual entre clases es el polvo del host, y es un sistemático conocido que
+hay que \emph{declarar} (ver sección \ref{sec:cadena-lanl}), no un bug que buscar.
+
+\subsection{¿Qué es exactamente el \emph{dimming} cosmológico?}
+\label{sec:dimming}
+
+Es el conjunto de efectos que hacen que un objeto de luminosidad intrínseca $L$ se vea más débil
+cuanto más lejos está, \emph{más} los factores extra que introduce la expansión del universo.
+Conviene separarlos porque se confunden con facilidad.
+
+\paragraph{1. Dilución geométrica.} El flujo cae con el cuadrado de la distancia porque los fotones
+se reparten sobre una esfera de área $4\pi d^2$:
+\begin{equation}
+F = \frac{L}{4\pi d^2}
+\end{equation}
+Es el único efecto que existiría en un universo estático. En magnitudes es el \textbf{módulo de
+distancia}
+\begin{equation}
+\mu = m - M = 5\log_{10}\!\left(\frac{d_L}{10\ \text{pc}}\right)
+\end{equation}
+
+\paragraph{2. Los dos factores $(1+z)$ de la expansión.} En un universo en expansión aparecen dos
+pérdidas adicionales de flujo, ambas de factor $(1+z)$:
+\begin{itemize}[nosep]
+  \item \textbf{Pérdida de energía por fotón}: cada fotón se estira,
+        $\nu_{\rm obs} = \nu_{\rm em}/(1+z)$, así que llega con energía $h\nu$ menor en un factor
+        $(1+z)$.
+  \item \textbf{Dilatación temporal}: los fotones llegan más espaciados en el tiempo, en un factor
+        $(1+z)$, de modo que la \emph{tasa} de llegada baja otro $(1+z)$. (Este mismo factor es el
+        que estira la curva de luz: una KN que decae en 3 d en reposo decae en $3(1+z)$ d para
+        nosotros.)
+\end{itemize}
+Ambos se absorben en la definición de la \textbf{distancia de luminosidad}
+\begin{equation}
+d_L = (1+z)\,d_C(z), \qquad d_C(z) = \frac{c}{H_0}\int_0^z \frac{dz'}{\sqrt{\Omega_m(1+z')^3+\Omega_\Lambda}}
+\end{equation}
+que es lo que garantiza que $F = L/(4\pi d_L^2)$ siga siendo válido. Es decir: los dos factores
+$(1+z)$ ya están dentro de $d_L$, no se aplican otra vez a mano. En el pipeline esto lo calcula
+\code{astropy.cosmology.Planck18} (y \code{FlatLambdaCDM($H_0$=67.4, $\Omega_m$=0.315)} para
+reproducir Chase+21).
+
+\paragraph{3. K-corrección.} No es una atenuación, sino una \emph{traducción de banda}: el filtro
+observa a $\lambda_{\rm obs}$, pero el objeto emitió a $\lambda_{\rm obs}/(1+z)$. Como el espectro
+no es plano, hay que integrar el espectro \emph{ya redshifteado} contra la transmisión del filtro
+en vez de usar la magnitud en reposo. En AB:
+\begin{equation}
+m_{\rm AB} = -2.5\log_{10}\!\left(
+\frac{\int f_\nu^{\rm obs}(\nu)\,T(\nu)\,d\nu/\nu}{\int 3631\,\text{Jy}\;T(\nu)\,d\nu/\nu}\right),
+\qquad f_\nu^{\rm obs}(\nu_{\rm obs}) = \frac{(1+z)\,L_\nu\bigl(\nu_{\rm obs}(1+z)\bigr)}{4\pi d_L^2}
+\end{equation}
+Para una KN esto es enorme, no una corrección de segundo orden: la SED es muy roja y evoluciona en
+horas, así que a $z=0.3$ la banda J está viendo lo que en reposo era $\sim$1 $\mu$m.
+
+\begin{examen}
+\textbf{Confusión frecuente.} ``\emph{Cosmological dimming}'' se usa también para el
+\textbf{oscurecimiento de brillo superficial} $\propto (1+z)^{-4}$, que aplica a fuentes
+\emph{extensas} (galaxias) y añade dos factores $(1+z)$ más por la contracción del ángulo sólido.
+Nuestros transientes son \textbf{puntuales}: solo aplican los dos $(1+z)$ de $d_L$, no cuatro.
+\end{examen}
+
+En OpenUniverse los tres efectos ya vienen aplicados (SNANA los mete al generar
+\code{sim\_mag\_obs}); en la rama LANL los aplicamos nosotros explícitamente, en el orden de la
+sección \ref{sec:cadena-lanl}.
+
+\subsection{Códigos \code{gentype}}
+\begin{center}
+\begin{tabular}{llllll}
+\toprule
+10 SN Ia & 12 SN Iax & 21 SN Ib & 26 SN Ic & 32 SN II & 40 SLSN-I \\
+42 TDE & \textbf{50 KN} & 57 PISN-H & 58 PISN-He & 99 FIXMAG & \\
+\bottomrule
+\end{tabular}
+\end{center}
+En los parquet la etiqueta autoritativa es la columna \code{label} (string), no el \code{gentype}:
+una sola fuente de verdad, sin diccionario que mantener sincronizado río abajo. Pero \textbf{en el
+entrenamiento la clase no la da ninguna de las dos, sino el archivo de procedencia}
+(\code{label\_by\_index = where(is\_kn, KN, other)}). Es seguro solo por un accidente afortunado:
+OpenUniverse \emph{sí} tiene kilonovas propias (\code{gentype}$=50$, modelos
+\code{NON1ASED.KN-K17} de Kasen+17), pero son $\sim$2 por healpix con \code{peak\_mag\_F}$\approx$30,
+así que nunca se detectan y jamás entran en \code{early\_windows\_*.parquet}. Ésa es también la
+respuesta a ``¿por qué la grilla LANL si OpenUniverse ya trae KN?''.
+
+\code{gentype}$=99$ (FIXMAG) se descarta al leer el catálogo, antes de la ventana.
+
+\subsection{Censo de la clase \emph{other}}
+\label{sec:censo}
+Cuidado con qué se está contando: la columna que importa para el entrenamiento es el número de
+\textbf{instancias por tier}, no de transientes distintos. El fichero \emph{deep} es un superset del
+\emph{wide}, y un mismo transiente observado en los dos aparece \emph{dos veces} y el dataloader lo
+trata como dos objetos.
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+clase & $n$ (deep$+$wide) & \% & transientes únicos \\
+\midrule
+SN II    & 677\,050 & 42.4 & 390\,141 \\
+SN Ia    & 443\,315 & 27.7 & 223\,578 \\
+SN Ic    & 213\,400 & 13.4 & 116\,881 \\
+SN Ib    & 190\,882 & 11.9 & 105\,985 \\
+SN Iax   & 63\,250  & 4.0  & 38\,237 \\
+TDE      & 7\,238   & 0.5  & 3\,720 \\
+SLSN-I   & 2\,237   & 0.1  & 1\,120 \\
+PISN-He  & 182      & $\sim$0 & 96 \\
+PISN-H   & 141      & $\sim$0 & 74 \\
+\midrule
+\textbf{total other} & \textbf{1\,597\,695} & 100 & \textbf{879\,832} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Comprobación de que la columna buena es la primera: $1\,597\,695$ contaminantes $+$
+$1\,401\,685$ KN $= 2\,999\,380$, exactamente el total del split (sección \ref{sec:split}). Y
+aplicando el reparto 90/5/5 clase por clase sobre esos conteos salen los $\sim$80\,k contaminantes
+de test; con la columna de transientes únicos saldría la mitad.
+
+\section{Receta de error fotométrico}
+
+Es el corazón cuantitativo del proyecto y vive en un único módulo,
+\code{src/kilonova/photometry/roman\_noise.py}, para que pipeline y notebooks no se
+desincronicen.
+
+\subsection{La ecuación CCD}
+Todo parte de la ecuación estándar de CCD (Howell 1989, eq.\ 14) en espacio de \textbf{electrones}:
+\begin{equation}
+\boxed{\;\sigma^2(F) = \underbrace{F_{\rm source}}_{\text{Poisson de la fuente}}
+ + \underbrace{\mathrm{NEA}\,\bigl(B_{\rm sky} + B_{\rm thermal} + B_{\rm dark} + \sigma_{\rm read}^2\bigr)}_{\text{fondo, por pixel} \times \text{pixeles efectivos}}\;}
+\label{eq:ccd}
+\end{equation}
+El primer término es la varianza de Poisson de $N$ electrones (que \emph{es} $N$). El segundo es el
+fondo por píxel multiplicado por el número efectivo de píxeles de la fotometría PSF: el
+\textbf{NEA} (\emph{Noise Equivalent Area}, King 1983; Naylor 1998), que es el $n_{\rm pix}$
+efectivo de una extracción óptima con pesos de PSF.
+
+\subsection{Flujo de la fuente y magnitud límite}
+Con $A$ el área colectora (\code{galsim.roman.collecting\_area}) y $\mathrm{ZP}$ el punto cero AB de
+la banda:
+\begin{align}
+F_{\rm source} &= t_{\rm exp}\, A \; 10^{-0.4\,(m_{\rm true} - \mathrm{ZP})} \quad [\eminus] \\
+\sigma_F &= \sqrt{F_{\rm source} + \mathcal{N}_{\rm band}}, \qquad
+\mathcal{N}_{\rm band} \equiv \mathrm{NEA}\,(B_{\rm sky}+B_{\rm th}+B_{\rm dark}+\sigma_{\rm read}^2) \\
+\mathrm{S/N} &= F_{\rm source} / \sigma_F, \qquad \text{detección si } \mathrm{S/N}\ge 5 \\
+m_{\rm lim,5\sigma} &= \mathrm{ZP} - 2.5\log_{10}\!\left(\frac{5\,\sigma_F}{t_{\rm exp}\,A}\right)
+\label{eq:mlim}
+\end{align}
+$\mathcal{N}_{\rm band}$ es constante por (banda, tier): no depende del objeto, así que se calcula
+una vez en \code{build\_tier\_constants}.
+
+El error de magnitud sale de la propagación logarítmica:
+\begin{equation}
+\sigma_m = \frac{2.5}{\ln 10}\,\frac{\sigma_F}{F} = \frac{1.0857}{\mathrm{S/N}}
+\end{equation}
+
+Y la magnitud \emph{observada} es una realización ruidosa \textbf{en espacio de flujo} (no de
+magnitud, que sería sesgado y explotaría con flujos negativos):
+\begin{equation}
+F_{\rm obs} = F_{\rm true} + \mathcal{G}(0,\sigma_F), \qquad
+m_{\rm obs} = \mathrm{ZP} - 2.5\log_{10}\!\bigl(F_{\rm obs}/(t_{\rm exp}A)\bigr)
+\end{equation}
+Si $F_{\rm obs}\le 0$ se reporta $m_{\rm lim,5\sigma}$ en su lugar.
+
+\subsection{Ruido de lectura \emph{up-the-ramp}}
+Roman lee el detector de forma no destructiva cada $t_{\rm frame}=3.04$ s; con $n = t_{\rm
+exp}/t_{\rm frame}$ lecturas (Rose et al.\ 2025, eq.\ 9):
+\begin{equation}
+\boxed{\;\sigma_{\rm read} = \sqrt{\sigma_{\rm floor}^2 + \sigma^2\,\frac{n-1}{n\,(n+1)}}\;}
+\qquad \sigma_{\rm floor}^2 = 25\ \eminus{}^2,\quad \sigma^2 = 12\cdot 16^2 = 3072\ \eminus{}^2
+\label{eq:read}
+\end{equation}
+
+\begin{examen}
+\textbf{Pregunta segura de examen.} ¿Por qué el denominador es $n(n+1)$ y no $(n+1)$? Porque el
+ajuste de la rampa promedia $n$ lecturas: la varianza del \emph{slope} estimado cae como $1/n$
+adicional. Con $(n+1)$ saldrían $55.46\ \eminus$, un factor 9 de más. Verificación numérica:
+$t_{\rm exp}=900$ s $\Rightarrow n=296 \Rightarrow \sigma_{\rm read}=5.942\ \eminus$, que es
+exactamente el 5.942 de la Tabla 3 del paper. \textbf{Cuidado al citarlo:} esos 900 s son la
+exposición \emph{de la Tabla 3}, no la nuestra --- la F184 deep del pipeline es de 1636 s y da
+$5.540\ \eminus$. Son dos números distintos y hay que decir cuál es cuál.\\[2pt]
+\textbf{Consecuencia contraintuitiva:} $\sigma_{\rm read}$ \emph{decrece} con $t_{\rm exp}$ y satura
+en el piso $\sqrt{25}=5\ \eminus$. Medidos: $5.540\ \eminus$ (F184 deep, 1636 s), $7.491\ \eminus$
+(H158, 294 s), $12.870\ \eminus$ (R062 wide, 60 s). Exposiciones cortas son \emph{más} ruidosas de
+lectura que las largas.
+\end{examen}
+
+\subsection{Fondo: cielo, térmico, dark}
+Todo sale de \code{galsim.roman} evaluado en el centro del campo del tier:
+\begin{align}
+B_{\rm sky} &= \texttt{getSkyLevel}(\text{banda}, \text{pos}, t_{\rm exp}) \times \texttt{pixel\_scale}^2
+  \quad [\eminus/\text{pix}] \\
+B_{\rm thermal} &= \texttt{thermal\_backgrounds}[\text{banda}]\cdot t_{\rm exp}, \qquad
+B_{\rm dark} = \texttt{dark\_current}\cdot t_{\rm exp}
+\end{align}
+Ojo con las unidades: \code{getSkyLevel} devuelve $\eminus/\text{arcsec}^2$; hay que multiplicar por
+\code{pixel\_scale}$^2$ \emph{antes} de sumar los términos por píxel.
+
+\subsection{NEA tabulada, no calculada}
+\label{sec:nea}
+\begin{center}
+\begin{tabular}{lrrrrrr}
+\toprule
+NEA [pix] & R062 & Z087 & Y106 & J129 & H158 & F184 \\
+\midrule
+ & 5.575 & 6.695 & 7.895 & 9.210 & 11.140 & 16.335 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Son los valores de la Tabla 3 de Rose et al.\ (2025): mediana entre el mejor y el peor punto del
+FOV, tomados de la PSF del sitio técnico de la WFI. \textbf{No} se usa \code{roman.getPSF} porque
+la PSF analítica del Ciclo 9 de galsim sobrestima el NEA un 15--28\,\% en las bandas azules (R/Z/Y);
+H y F sí coinciden. Es independiente del tier y del tiempo de exposición.
+
+\subsection{Jitter del punto cero}
+El $\mathrm{ZP}$ efectivo depende de la posición en el FOV. Se modela (Rose et al.\ 2025, eq.\ 8)
+como un jitter gaussiano de $\sigma_{\rm ZP}=0.15$ mag, sorteado \textbf{una vez por (banda,
+visita)} y fijo por objeto. Se usan dos flujos de números aleatorios independientes (\code{spawn}
+de una \code{SeedSequence}) para el jitter y para la realización de ruido, de modo que no queden
+correlacionados.
+
+\subsection{La misma ecuación en el lenguaje de SNANA (Hourglass)}
+Hourglass entrega flujos en unidades \code{fluxcal} con $\mathrm{ZP_{SNANA}}=27.5$:
+$m = 27.5 - 2.5\log_{10}(\text{fluxcal})$. Traducida a esas unidades, la Ec.\ \eqref{eq:ccd} es
+\begin{align}
+F_{\rm sim} &= \texttt{fluxcal}\cdot 10^{0.4\,(m - \texttt{sim\_mag\_obs})}, \qquad
+\alpha \equiv 10^{(27.5-\texttt{zp})/2.5} \\
+\sigma^2_{\rm pred} &= \underbrace{\alpha\,F_{\rm sim}}_{\text{fuente}}
+ + \underbrace{\mathrm{NEA}\,(\sigma_{\rm sky}^2+\sigma_{\rm read}^2)\,\alpha^2}_{\text{fondo}}
+\end{align}
+
+\begin{examen}
+\textbf{Pregunta clásica: ¿por qué un término lleva $\alpha$ y el otro $\alpha^2$?}\\
+\emph{Los dos} llevan $\alpha^2$ de propagación de unidades; en el de fuente uno de los dos factores
+se cancela solo, porque la varianza de Poisson es \textbf{lineal} en las cuentas. Con
+$\texttt{fcal} = \alpha F_e$:
+\[
+\mathrm{Var}_{\rm fcal} = \alpha^2\,\mathrm{Var}_{e} = \alpha^2 F_e
+ = \alpha^2\,\frac{F_{\rm fcal}}{\alpha} = \alpha\,F_{\rm fcal}
+\]
+El fondo no cancela nada porque ya nace \emph{siendo} una varianza en $[\eminus{}^2/\text{pix}]$: ahí
+$\alpha^2$ es propagación pura $[\eminus{}^2]\to[\text{fcal}^2]$. No interviene ningún factor de
+Fano --- para un Poisson vale 1 por definición, y $\alpha$ no es eso sino un cambio de unidades.
+\end{examen}
+
+Hourglass suma además un término de \emph{host surface brightness} dentro de \code{fluxcal\_err} que
+no es desagregable. Por eso la validación reproduce \code{fluxcal\_err} con razón mediana
+$\approx 0.986$, y el p05 baja en F/H deep, donde el host domina.
+
+\subsection{Referencias de la receta}
+Howell (1989) \emph{PASP} 101, 616 (ecuación CCD) $\cdot$ King (1983) \emph{PASP} 95, 163 (NEA)
+$\cdot$ Naylor (1998) \emph{MNRAS} 296, 339 (extracción óptima) $\cdot$ Fano (1947) $\cdot$
+Kessler et al.\ (2009) \emph{PASP} 121, 1028 (SNANA) $\cdot$ Hounsell et al.\ (2018) \emph{ApJ} 867,
+23 $\cdot$ Rose et al.\ (2025) \emph{ApJ} 988, 65 (Hourglass; eqs.\ 8--10 y Tabla 3).
+
+\section{La grilla LANL de kilonovas}
+
+\subsection{Parámetros}
+900 simulaciones radiativas únicas (\code{simulation\_id}), cada una con \textbf{dos componentes de
+eyecta} (dinámica y viento), cada componente con su masa y su velocidad:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+parámetro & significado & valores \\
+\midrule
+\code{run\_type} & morfología (dyn toroidal $+$ viento) & TP (peanut), TS (esférico) \\
+\code{wind} & composición del viento & wind1 ($Y_e{=}0.27$), wind2 ($Y_e{=}0.37$) \\
+\code{mass\_dynamical} & masa eyecta dinámica & 0.001, 0.003, 0.01, 0.03, 0.1 $\Msun$ \\
+\code{velocity\_dynamical} & velocidad dinámica & 0.05, 0.15, 0.3 $c$ \\
+\code{mass\_wind} & masa del viento & 0.001, 0.003, 0.01, 0.03, 0.1 $\Msun$ \\
+\code{velocity\_wind} & velocidad del viento & 0.05, 0.15, 0.3 $c$ \\
+\code{angle\_index} & bin de ángulo de visión & 0--53 (54 bins uniformes en $\cos\theta$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+La cuenta de las 900 simulaciones cierra exactamente:
+\begin{equation}
+\underbrace{2}_{\text{morfología del viento}} \times
+\underbrace{2}_{\text{composición del viento}} \times
+\underbrace{5}_{m_{\rm dyn}} \times \underbrace{3}_{v_{\rm dyn}} \times
+\underbrace{5}_{m_{\rm wind}} \times \underbrace{3}_{v_{\rm wind}} = 900
+\end{equation}
+y $900 \times 54 = \mathbf{48\,600}$ realizaciones físicas distintas --- exactamente la
+marginalización uniforme (sin pesos) que promedia Chase et al.\ (2021).
+
+\paragraph{Qué son \code{run\_type} y \code{wind} en física.} Los dos ejes ``categóricos'' de la
+grilla son morfología y composición de la eyecta (Tabla 2 de Chase+21):
+\begin{itemize}[nosep]
+  \item La \textbf{eyecta dinámica} es siempre \emph{toroidal} y con $Y_e = 0.04$ fijo (muy
+        neutronizada $\Rightarrow$ produce lantánidos $\Rightarrow$ opacidad alta y emisión roja).
+        No es un eje de la grilla: es una constante del set.
+  \item \code{run\_type} $\in\{$TP, TS$\}$ codifica la \textbf{morfología del viento}: T(oroidal
+        dinámica) $+$ viento en forma de ``P(eanut)'' o ``S(férico)''. Cambia el ángulo sólido que
+        cada componente cubre y, por tanto, cuánta eyecta roja se interpone en la línea de visión.
+  \item \code{wind} $\in\{$wind1, wind2$\}$ codifica la \textbf{composición del viento}:
+        $Y_e = 0.27$ y $Y_e = 0.37$. El viento es menos neutronizado que la eyecta dinámica, así que
+        es lantánido-pobre: opacidad menor, emisión más azul y más rápida.
+\end{itemize}
+Ésa es la razón física de que el ángulo importe tanto: mirando por el polo se ve el viento azul casi
+sin obstrucción; mirando por el ecuador, el toro dinámico rojo tapa el viento. Es el mismo efecto
+que hace que las 54 realizaciones angulares de \emph{una misma} simulación puedan diferir en varias
+magnitudes.
+
+\subsection{Ejes continuos: tiempo y longitud de onda}
+\label{sec:lanl-ejes}
+
+Los espectros están tabulados en reposo sobre dos rejillas logarítmicas. Números medidos
+directamente sobre \code{lanl\_spectra.parquet} (3\,301\,884 filas $=$ una por
+(simulación, tiempo, ángulo)):
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+eje & rango & muestreo \\
+\midrule
+tiempo post-merger (reposo)
+  & $t_{\min} = 0.125$ d $=$ \textbf{3 h}
+  & 73 nodos logarítmicos, \\
+  & $t_{\max} = 64$ d
+  & razón $r = 512^{1/72} = 1.0905$ \\[4pt]
+longitud de onda (reposo)
+  & $\lambda_{\min} = 1002.35$ Å $= 0.100\ \mu$m
+  & 1024 nodos logarítmicos, \\
+  & $\lambda_{\max} = 127\,695$ Å $= 12.77\ \mu$m
+  & razón 1.00475 ($R \approx 211$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Detalles importantes de esas rejillas:
+
+\begin{itemize}
+  \item \textbf{$t_{\min} = 0.125$ d es un corte duro}: no existe ningún espectro antes de las 3
+        horas post-merger. En el observador eso son $0.125(1+z)$ d, así que a $z=0.3$ la primera
+        información disponible es a $\sim$3.9 h. Sesga las bandas azules (que es donde la KN es
+        brillante justo al principio) hacia $z$ bajo, y el propio Chase+21 lo declara como
+        limitación, no es un artefacto nuestro.
+  \item \textbf{$t_{\max} = 64$ d es el techo del set, pero no el de cada simulación}: solo
+        \textbf{100 de las 900} simulaciones llegan a 64 d. Por simulación hay entre \textbf{63 y 73}
+        nodos temporales (mediana 67) y el último tiempo va de \textbf{26.9 d a 64 d}; los cortes
+        más frecuentes están en 26.9, 34.9, 38.1, 49.3 y 53.8 d. Los modelos más débiles y rápidos
+        son los que terminan antes. Para nuestro problema es irrelevante: la ventana temprana cubre
+        4 épocas $\times$ 5 d $=$ 20 d observador, dentro del rango de \emph{todas} las
+        simulaciones.
+  \item El rango en $\lambda$ (0.1--12.8 $\mu$m) cubre holgadamente los seis filtros Roman
+        (0.48--2.00 $\mu$m) incluso redshifteado: a $z=1$, F184 muestrea $\sim$0.92 $\mu$m en
+        reposo, muy dentro de la rejilla. La resolución $R\approx211$ es más que suficiente para
+        fotometría de banda ancha.
+  \item Las unidades del flujo almacenado son \code{erg s$^{-1}$ cm$^{-2}$ \AA$^{-1}$}, a
+        \textbf{10 pc}, en convención \emph{isotrópico-equivalente} (ver el factor 54 más abajo).
+        Todo esto está escrito en la metadata del parquet, no hay que recordarlo de memoria.
+  \item Interpolación: para un tiempo observador $t_{\rm obs}$ y un redshift $z$ se entra en la
+        rejilla con $t_{\rm rest} = t_{\rm obs}/(1+z)$. Y no es interpolación sino \textbf{vecino más
+        cercano} (\code{nearest\_time\_index}), en tiempo y en fase. En $\lambda$ sí hay control de
+        cobertura y una banda no cubierta devuelve NaN; en \emph{tiempo} no lo hay: pasado el último
+        nodo de la simulación se queda \textbf{pegado} a ese último espectro en vez de excluirse.
+        Afecta poco porque la ventana son 4 épocas desde la primera detección y las simulaciones
+        llegan a 26.9 d como mínimo, pero es lo que hace el código.
+\end{itemize}
+
+\subsection{El bug grande: el factor angular 54}
+Los ficheros \code{\_spec\_} de LANL guardan el flujo \textbf{por bin angular}, no el equivalente
+isotrópico. Un observador situado en el bin $k$ ve una fuente cuya luminosidad aparente es la de ese
+bin repartida por toda la esfera:
+\begin{equation}
+\text{factor} = \frac{4\pi}{\Delta\Omega_{\rm bin}} = n_{\rm angles} = 54
+\quad\Longrightarrow\quad
+\Delta m = -2.5\log_{10} 54 = \mathbf{-4.331\ \text{mag}}
+\end{equation}
+Sin él \textbf{toda} kilonova sintética salía 4.33 mag demasiado débil (llegábamos a $z=0.24$ donde
+Chase+21, con la misma grilla, llega a $z\sim1$). Verificación: la integral bolométrica del espectro
+reproduce $L_{\rm bol}/(4\pi(10\,\text{pc})^2)$ de los ficheros \code{\_lums\_} con razón 1.0000 en
+todas las fases (los espectros están a 10 pc y se leían bien), y los bloques de banda de
+\code{\_lums\_} son $L_\nu$, que encajan con \code{\_mags\_} vía $f_\nu = L_\nu/(4\pi(10\,{\rm
+pc})^2)$. La convención queda registrada en la metadata del parquet
+(\code{flux\_convention}): \textbf{no aplicar el factor dos veces}.
+
+\subsection{Del espectro en reposo a la magnitud AB observada}
+\label{sec:cadena-lanl}
+
+\begin{examen}
+\textbf{Trampa de la que es fácil caer (y estas notas cayeron).} El repositorio tiene \emph{dos}
+caminos de fotometría de kilonovas y solo uno genera los datos de entrenamiento. El módulo
+\code{simulation/extinction.py} documenta una cadena preciosa con extinción de host, extinción
+galáctica y reglas de parada --- y \textbf{no es la que produce \code{kn\_windows\_*.parquet}}. Es
+el CLI \code{kn-extinguish}, una rama paralela que escribe ``fotometría extinguida'' y muere ahí.
+\end{examen}
+
+\noindent\textbf{La cadena real} del CLI \code{kn-kilonova-windows}, que es la que importa
+(\code{early\_windows.kn\_model\_from\_spectra} $\to$ \code{photometry/spectra.py}):
+\begin{equation}
+\text{espectro rest} \xrightarrow{\text{clip}(f_\lambda \ge 0)}
+\xrightarrow[\text{specutils}]{\text{redshift}}
+\xrightarrow{(10\,\text{pc}/d_L)^2/(1+z),\ \text{Planck18}}
+\xrightarrow[\text{galsim.roman}]{\text{bandpasses}} m_{\rm AB}^{\rm Roman}
+\end{equation}
+\textbf{Sin polvo, con galsim y no pyphot, y sin reglas de parada.} De \code{extinction.py} el CLI
+importa exactamente una cosa: \code{build\_redshift\_grid}. Consecuencia científica, que hay que
+declarar como sistemático: las KN del set no llevan extinción ninguna, mientras que los
+contaminantes llevan la del host dentro de su modelo SED (ver el cuadro de la sección
+\ref{sec:dimming}). Es la única receta que \emph{no} se comparte entre las dos ramas.
+
+\begin{examen}
+\textbf{¿Y ese $1/(1+z)$ extra no contradice ``solo dos factores $(1+z)$''?} No. Los dos $(1+z)$
+físicos están dentro de $d_L$ y no se aplican otra vez. El tercero es el \textbf{jacobiano}
+$d\lambda_{\rm obs}/d\lambda_{\rm rest} = (1+z)$: \code{specutils} solo estira el eje de longitud de
+onda, así que la \emph{densidad} $f_\lambda$ tiene que llevar el inverso para que
+$\int f_\lambda\,d\lambda$ siga dando $L/(4\pi d_L^2)$. Fotométricamente es el término de
+K-corrección; quitarlo ``por duplicado'' deja toda fuente $2.5\log_{10}(1+z)$ demasiado brillante.
+\end{examen}
+
+Cosmología para comparar con Chase+21: $\Lambda$CDM plana con $H_0=67.4$, $\Omega_m=0.315$,
+$\Omega_\Lambda=0.685$ (Planck 2020).
+
+\paragraph{Lo que sí vive en \code{extinction.py} (para la otra rama).} Cadena
+rest $\to$ F99$(A_V^{\rm host}, R_V^{\rm host})$ $\to$ redshift $\to$ dimming $\to$
+F99$(A_V^{\rm MW}=3.1\,E(B{-}V))$ $\to$ pyphot, con el polvo sorteado una vez por redshift y
+$E(B{-}V)$ del mapa SFD, más dos reglas de parada para no evaluar la grilla entera: \textbf{STOP-A}
+(rompe el bucle de $z$ tras \code{z\_patience} redshifts consecutivos sin ninguna detección) y
+\textbf{STOP-LC} (trunca el eje temporal cuando \emph{todas} las bandas acumulan \code{lc\_patience}
+pasos decrecientes no detectados). Nada de esto toca al clasificador.
+
+\subsection{Muestreo de ventanas KN}
+Una ``KN observada'' es una realización de
+(simulación, ángulo, offset de explosión, $z$, paridad, ruido):
+\begin{itemize}[nosep]
+  \item \textbf{Grilla de $z$}: logarítmica. Por defecto del CLI $z\in[0.01,1]$ con 50 nodos y 200
+        realizaciones/nodo; la corrida que entrenó el modelo usó 100 nodos en $[0.02,1]$ y
+        \textbf{10\,000 realizaciones por nodo}.
+  \item \textbf{Offset de explosión}: $t_0 \sim U[0,5)$ d, días observador entre el merger y la
+        primera visita. Las visitas de una KN son $t_0 + 5\cdot\{0,\dots,7\}$ (8 visitas: margen para
+        encontrar la 1.ª detección más 4 épocas).
+  \item \textbf{Paridad de cadencia}: sorteada aparte, ver más abajo.
+  \item Las realizaciones se comparten entre tiers: \emph{la misma} KN se observa en deep y en wide.
+  \item Las realizaciones nunca detectadas \textbf{no se escriben}. Consecuencia importante para
+        cualquier estadística: el denominador es el número de realizaciones sorteadas, no el número
+        de filas; los ceros del mapa son los objetos ausentes.
+  \item \code{object\_id} $=$
+        \code{\{simulation\_id\}\_\{angle\_index\}\_\{offset:.4f\}\_\{z:.4f\}\_\{parity\}\_\{noise\_id\}}
+        --- los parámetros no son columnas, van codificados en el id (y el \code{simulation\_id} va
+        primero porque el split anti-fuga lo lee de ahí).
+\end{itemize}
+
+\begin{examen}
+\textbf{La fuga de la paridad de cadencia (muy preguntable).} El patrón de bandas se repite cada 2
+visitas, así que la fase del merger dentro del ciclo tiene \emph{dos} grados de libertad: el retardo
+hasta la primera visita ($t_0$) y la \textbf{paridad} de esa visita. Como la grilla KN se construye
+como $t_0 + 5\cdot\text{arange}(N)$, su índice 0 era \emph{siempre} par. Y como la KN es rápida y
+casi siempre se detecta en la primera visita, eso imprimía la fase de la cadencia en la clase KN:
+92\,\% par frente a 29\,\% en los contaminantes, y \textbf{la máscara de bandas sola clasificaba al
+80.7\,\%}. En un survey real la grilla es fija en tiempo absoluto y el merger cae uniforme en el
+ciclo de 10 d, o sea paridad 50/50 e independiente del retardo. Solución: sortear la paridad.\\[2pt]
+\textbf{Y ojo con el remate:} en la población que \emph{sobrevive} la paridad no sale 50/50 sino
+48/52 (deep) y 45/55 (wide). No es que el arreglo falle: la paridad también decide si esa visita
+lleva las bandas rojas, y eso cambia la \emph{detectabilidad}. Ese residuo es físico y legítimo ---
+en un survey real pasaría igual --- a diferencia del 92\,\% original, que era una huella del
+generador.
+\end{examen}
+
+\subsection{Validación contra Chase et al.\ (2021)}
+Chase+21 (arXiv:2105.12268) usa esta misma grilla, así que es la prueba externa. Fracción de KN
+detectables, contornos leídos de la figura de Roman/H:
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+contorno & Chase+21 & nuestro (deep) & nuestro (wide) \\
+\midrule
+0.95 & $\sim$0.09 & $\sim$0.095 & 0.088 \\
+0.50 & \textbf{0.22} & \textbf{0.215} & 0.201 \\
+0.05 & $\sim$0.48 & 0.477 & 0.454 \\
+\bottomrule
+\end{tabular}
+\qquad
+\begin{tabular}{lcc}
+\toprule
+corte (pico del contorno 0.5) & paper & nuestro \\
+\midrule
+$m_{\rm dyn}=0.1\,\Msun$   & 0.31 & $\sim$0.31 \\
+$m_{\rm wind}=0.1\,\Msun$  & 0.37 & $\sim$0.365 \\
+$m_{\rm dyn}=0.001\,\Msun$ & 0.16 & $\sim$0.147 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Coinciden dentro de la tolerancia de $\pm0.02$. La forma también reproduce la Fig.\ 3 del paper:
+pico en $t\sim1$ d en las bandas azules y $\sim3$ d en F184, alcance creciente hacia el rojo.
+El criterio del paper es $m_{\rm true} < m_{\rm lim}$ con su Tabla 1 fija; el nuestro es S/N$\ge5$
+con la receta de ruido. En \emph{deep} el nuestro llega más lejos ($z_{50\%}=0.49$ en F184) porque
+el tier deep es 1--2 mag más profundo por visita que lo que tabula el paper (F184: 27.0 vs 24.9);
+en \emph{wide}, donde las profundidades coinciden, los dos criterios dan casi lo mismo --- que es
+la comprobación cruzada interesante.
+
+\section{La ventana temprana}
+
+Regla única, idéntica para KN y contaminantes (\code{epochs\_from\_first\_detection}):
+
+\begin{enumerate}[nosep]
+  \item Se calcula S/N en todas las (visita, banda) que la cadencia observa.
+  \item \textbf{Primera detección} $=$ la visita más temprana con S/N$\ge5$ en \emph{cualquier}
+        banda. Si no hay ninguna, el objeto se descarta (nunca entraría en un pipeline de
+        transientes).
+  \item Se toman \textbf{hasta 4 épocas consecutivas} desde ahí (\code{NUMBER\_OF\_EPOCHS}$=4$). Una
+        visita sin detección igual cuenta como época. ``Hasta'': si el modelo se acaba antes salen
+        menos, y de hecho $\sim$0.7\,\% de los contaminantes tienen 1--3 épocas. Las KN casi siempre
+        tienen las 4, porque su grilla son 8 visitas.
+  \item Eje temporal: \code{days\_since\_detection} $= t_{\rm epoch} - t_{\rm 1ª\,detección}$. El
+        MJD absoluto nunca se usa.
+\end{enumerate}
+
+El modelo ve \textbf{3 épocas} (\code{EPOCHS\_PER\_WINDOW}$=3$); la 4.ª se guarda como \emph{buffer}
+para la augmentación de desplazamiento.
+
+\begin{examen}
+\textbf{Cuántos tokens hay, exactamente.} El vocabulario tiene 6 bandas, pero \textbf{cada tier
+observa solo 5} (deep ZYJHF, wide RZYJH): el vocabulario es la \emph{unión} de los dos tiers y
+ninguna secuencia individual las lleva todas. Así que son
+$3 \text{ épocas} \times 5 \text{ bandas} = \mathbf{15}$ tokens como máximo, más \code{[CLS]} y
+\code{[Z]}: \textbf{$\le$17 posiciones}. (Se comprueba en el parquet: 20 filas por objeto
+$=$ 4 épocas $\times$ 5 bandas.)
+\end{examen}
+
+Esquema de fila del parquet (14 columnas): \code{object\_id, gentype, label, z\_CMB, epoch,
+days\_since\_detection, band, observed, mag\_true, mag\_observed, mag\_err, snr, detected,
+mag\_limit\_5sigma}. Los \code{early\_windows\_*} de contaminantes llevan una 15.ª,
+\code{snana\_id}, que \emph{no} es un id de plantilla SED (solo tiene 33 valores, uno por healpix)
+y por tanto no sirve para el split.
+
+\section{Tokens}
+
+\subsection{Un token $=$ una medición (objeto, visita, banda)}
+
+\begin{center}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+campo & qué es \\
+\midrule
+\code{delta\_time} & días desde la época ancla de la ventana (float, sin normalizar; lo codifica Time2Vec) \\
+\code{band\_index} & 0--5 \\
+\code{token\_type\_index} & \code{d}$=$0 detección, \code{u}$=$1 upper limit, \code{n}$=$2 no observado \\
+\code{magnitude} & $(m_{\rm obs} - \mu_m)/\sigma_m$, o 0.0 con \code{magnitude\_mask}$=$0 \\
+\code{sigma\_magnitude} & $(\sigma_{m,\rm obs} - \mu_\sigma)/\sigma_\sigma$, o 0.0 con \code{sigma\_mask}$=$0 \\
+\code{magnitude\_mask}, \code{sigma\_mask} & 1.0 si el valor es real, 0.0 si es relleno \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Los tres tipos de token codifican \textbf{tres niveles de información} distintos:
+\begin{itemize}[nosep]
+  \item \code{d} --- detección (\code{detected}, o S/N$\ge5$ si falta el flag): magnitud real
+        $+$ $\sigma_m$ real.
+  \item \code{u} --- observado pero no detectado: la magnitud es el \textbf{límite 5$\sigma$ de
+        \emph{esa} visita}, Ec.\ \eqref{eq:mlim}, sin $\sigma$. Nunca una profundidad fija de survey:
+        la profundidad realmente alcanzada \emph{es} el contenido informativo de la no-detección.
+  \item \code{n} --- esa banda no se observó esa noche: magnitud y $\sigma$ enmascaradas, pero el
+        token conserva $(\Delta t, \text{banda})$. La cadencia de Roman es determinista, así que
+        ``no se miró'' es información distinta de ``se miró y no había nada''.
+\end{itemize}
+
+\subsection{Normalización global}
+Nunca por objeto --- el brillo aparente \emph{es} señal. Estadísticas ajustadas \textbf{solo sobre
+los tokens de detección (\code{d}) del split de train} --- los límites superiores no entran en
+$\mu$ ni en $\sigma$, aunque después se normalicen con ellos --- y guardadas en
+\code{normalization.json}:
+\[
+\mu_m = 24.9204,\quad \sigma_m = 1.6660,\qquad
+\mu_\sigma = 0.09270,\quad \sigma_\sigma = 0.06418
+\]
+
+\subsection{Tokens globales y regímenes de redshift}
+\begin{itemize}[nosep]
+  \item \code{[CLS]}: token aprendido; su salida final alimenta la cabeza de clasificación.
+  \item \code{[Z]}: si hay $z$, se proyecta linealmente a $d_{\rm model}$; si no, se usa un token
+        aprendido \code{no\_redshift\_token}.
+  \item \textbf{Dropout de redshift} $=0.50$ en train: la mitad de las veces se oculta el $z$
+        verdadero, para que el mismo modelo sirva con y sin $z$. En validación se miden los dos
+        regímenes por separado (\code{val\_acc\_z} vs \code{val\_acc\_noz}).
+\end{itemize}
+
+\subsection{Augmentaciones}
+Son \textbf{tres}, todas estocásticas en el dataloader (se re-sortean cada vez que el objeto entra
+en un batch, no son un split fijo) y todas apagadas en validación y test:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Truncamiento aleatorio de prefijo.} Cada ejemplo se recorta a \textbf{1, 2 o 3
+        épocas} con probabilidad uniforme (\code{rng.integers(1, 4)}). \textbf{Ésta es la
+        augmentación clave}: es lo único que hace que el modelo funcione con una sola época, y sin
+        ella la matriz de degradación de la sección \ref{sec:resultados} no tendría sentido.
+  \item \textbf{Desplazamiento de ventana}, probabilidad $0.20$: se descarta la época 1 y se re-ancla
+        $\Delta t$ en la 2. Solo para objetos elegibles (con detección real en la segunda visita)
+        --- de ahí que se guarde la 4.ª época. Simula el $\sim$20\,\% de eventos que la fase de
+        explosión uniforme captura ya con $\ge$4 d de edad.
+  \item \textbf{Dropout de redshift}, probabilidad $0.50$ (sección anterior).
+\end{enumerate}
+
+\noindent Las tres se aplican igual a KN y contaminantes, para que el régimen sea simétrico entre
+clases.
+
+\subsection{Sin token de modo deep/wide}
+Decisión de diseño con justificación explícita: lo que un \emph{embedding} de modo llevaría --- la
+profundidad realmente alcanzada --- ya está en los tokens de forma continua ($\sigma_m$ para
+detecciones, $m_{\rm lim,5\sigma}$ para no-detecciones). Añadirlo grabaría la rejilla
+banda$\times$tier en el encoder como una huella dactilar del simulador, ampliando la brecha de
+dominio con los datos reales de Roman.
+
+\section{El transformer}
+
+Fichero \code{training/model.py}: encoder-only tipo \emph{set transformer}. Los tokens son un
+\textbf{conjunto indexado por (tiempo, banda)}, no una secuencia ordenada: el tiempo entra como
+\emph{feature continua dentro del token}, nunca como positional encoding.
+
+\subsection{Time2Vec}
+\begin{equation}
+\tau = \frac{\Delta t}{\Delta t_{\rm scale}},\quad \Delta t_{\rm scale}=5\ \text{d};\qquad
+\mathrm{t2v}(\Delta t) = W\bigl[\underbrace{w_0\tau + b_0}_{\text{lineal}},\;
+\underbrace{\sin(w_i \tau + b_i)}_{i=1\dots K}\bigr] \in \mathbb{R}^{d_{\rm model}}
+\end{equation}
+El \textbf{término lineal es el caballo de batalla}: es lo que permite a la atención restar tiempos
+de dos tokens y obtener una \emph{tasa de decaimiento} $\Delta m/\Delta t$, que es la física
+discriminante (KN: días; SN: semanas). En el modelo actual $K = 0$
+(\code{TIME2VEC\_FREQUENCIES}$=0$): con 3 épocas sobre $\sim$15 d no hay periodicidad resoluble ni
+física, y los transientes no son pulsadores. Los pesos $w_i$ se inicializan en
+\code{linspace(0.5, 3.0)} (periodos $\sim$10--60 d) si se activan.
+
+\subsection{Fusión del token}
+\begin{equation}
+\text{content} = \mathrm{LayerNorm}\Bigl(\mathrm{Linear}\bigl[\,e_{\rm band}\,\|\,e_{\rm type}\,\|\,(m,\sigma_m,\text{mask}_m,\text{mask}_\sigma)\,\bigr]\Bigr),
+\qquad x = \text{content} + \mathrm{t2v}(\Delta t)
+\end{equation}
+El tiempo se \textbf{suma}, el resto se concatena y se proyecta. Dimensiones de los embeddings:
+$d_{\rm band}=6$, $d_{\rm type}=3$ --- una tabla de $N$ filas seguida de una capa lineal tiene rango
+efectivo $\le\min(N,D)$, así que $D=N$ es la elección más pequeña sin pérdida.
+
+Secuencia de entrada: $[\,\code{CLS},\ \code{Z},\ x_1,\dots,x_N\,]$ más una máscara de padding.
+
+\subsection{Bloque encoder (pre-norm)}
+\begin{align}
+x &\leftarrow x + \mathrm{Dropout}\bigl(\mathrm{MHA}(\mathrm{LayerNorm}(x))\bigr) \\
+x &\leftarrow x + \mathrm{FFN}(\mathrm{LayerNorm}(x)), \qquad
+\mathrm{FFN}(u) = W_2\,\mathrm{Dropout}(\mathrm{GELU}(W_1 u))
+\end{align}
+con atención escalada estándar y bidireccional (sin máscara causal):
+\begin{equation}
+\mathrm{Attention}(Q,K,V) = \mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_{\rm head}}}\right)V
+\end{equation}
+Cabeza: \code{classification\_head(LayerNorm(encoded[:,0]))}, es decir solo la salida de
+\code{[CLS]} $\to$ logits de 2 clases.
+
+\subsection{Hiperparámetros entrenados}
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+parámetro & \emph{default} de \code{model.py} & \textbf{entrenamiento actual} \\
+\midrule
+\code{d\_model} & 64 & \textbf{192} \\
+\code{num\_heads} & 4 & \textbf{6} \\
+\code{num\_layers} & 2 & \textbf{6} \\
+\code{d\_feedforward} & 128 & \textbf{768} ($4\times d_{\rm model}$) \\
+\code{dropout} & 0.1 & 0.1 \\
+\code{num\_classes} & 2 & 2 (\code{other}, \code{KN}) \\
+\midrule
+parámetros totales & --- & \textbf{2\,674\,225} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Receta de entrenamiento}
+\begin{itemize}[nosep]
+  \item Optimizador \textbf{AdamW}; scheduler \textbf{coseno con warmup} lineal (5 épocas);
+        lr $10^{-3}$, weight decay $10^{-4}$, batch 512.
+  \item Hasta 150 épocas con \textbf{EarlyStopping} (patience 25) monitorizando \code{val\_acc\_noz};
+        la corrida registrada llegó a la \textbf{época 122} ($\sim$647\,k pasos).
+  \item \code{val\_acc\_noz} no es un número suelto: es la \textbf{media de la \emph{macro}-accuracy
+        sobre los tres regímenes sin $z$} (1, 2 y 3 épocas). O sea, el checkpoint se elige por
+        rendimiento equilibrado a lo largo del presupuesto de épocas, no por la ventana completa.
+  \item \textbf{Pesos de clase} inversos a la frecuencia con \code{mode='sqrt'} (suaviza el
+        desbalance en vez de invertirlo del todo).
+  \item \textbf{Selección de modelo por \code{val\_acc\_noz}}, no por \code{val\_acc\_z}.
+  \item \textbf{Model soup}: se promedian los pesos de los 5 mejores checkpoints en vez de fiarse de
+        una sola época (\code{checkpoints/kilonova\_transformer-soup.ckpt}).
+\end{itemize}
+
+\begin{examen}
+\textbf{¿Por qué seleccionar por \code{val\_acc\_noz}?} Porque KN y contaminantes son casi
+\emph{disjuntos en redshift}: las KN de LANL se concentran brutalmente a $z$ bajo (mediana $0.09$,
+p90 $0.37$, p99 $0.77$) mientras los contaminantes llegan a $z\sim3$. Con $z$ visible, la exactitud
+sale artificialmente casi perfecta: el modelo
+puede usar el atajo ``$z$ bajo $\Rightarrow$ KN'', que solo existe porque el batch está balanceado
+--- en la realidad, incluso a $z<0.5$, los contaminantes superan a las KN $\sim$100:1. La dirección
+contraria (``$z$ alto $\Rightarrow$ no es KN'') sí es física y debe aprenderse.\\[2pt]
+\textbf{Pero no digas ``las KN solo se detectan bajo $z=0.5$''}, porque no es cierto y es fácil de
+refutar: el 4.7\,\% de las KN detectadas en deep está por encima, y a $z=1.0$ todavía se detectan
+809 de cada 10\,000. Lo correcto es ``el 95\,\% se detecta bajo $z=0.5$, con cola hasta $z=1$''.
+(El comentario de \code{train\_lightning.py} que dice ``KN capped at $z=0.4$'' está mal.)
+\end{examen}
+
+\subsection{Split anti-fuga}
+\label{sec:split}
+90/5/5, y la regla es una sola: \textbf{nunca se reparten objetos, se reparten grupos}, y el grupo
+es \emph{global a los dos tiers}. Lo que cambia entre clases es qué se considera un grupo:
+\begin{itemize}[nosep]
+  \item \textbf{KN} $\to$ grupo $=$ \code{simulation\_id} (el primer campo del \code{object\_id}).
+        Si la misma simulación física apareciera en train y test, con otro ángulo, otro $z$ u otro
+        ruido, sería fuga. Son 900 grupos $\to$ 810/45/45 modelos.
+  \item \textbf{Contaminantes} $\to$ grupo $=$ \code{object\_id}
+        (\code{snana\_\{healpix\}\_\{id\}}), \emph{sin} prefijo de tier, estratificado por clase
+        original.
+\end{itemize}
+Como las fracciones se aplican al número de \emph{grupos} y no todos los grupos pesan lo mismo
+(un contaminante visto en los dos tiers vale 2 objetos, uno visto solo en deep vale 1), los tamaños
+en objetos se desvían un poco del 90/5/5 exacto: \textbf{2\,693\,717 / 151\,961 / 153\,702}
+(test: 79\,926 \code{other} $+$ 73\,776 KN).
+
+\begin{examen}
+\textbf{La fuga que hubo, y hay que saber contestarla} (arreglada el 2 de agosto de 2026; el modelo
+de la sección \ref{sec:resultados} es \emph{anterior} al arreglo). El fichero \emph{deep} es
+superset del \emph{wide}: \textbf{717\,863} transientes de OpenUniverse están en los dos tiers con
+el \emph{mismo} \code{object\_id}. La versión vieja del split le ponía prefijo de tier a la clave de
+grupo (\code{deep\_<id>} vs \code{wide\_<id>}), así que las dos vistas del \emph{mismo} transiente
+caían en splits \textbf{independientes}. Con 90/5/5 eso son
+\[
+717\,863 \times 2 \times 0.9 \times 0.05 \approx 64\,600
+\]
+objetos de test ($\sim$81\,\% de los 79\,885 contaminantes de test de entonces) cuyo gemelo del otro
+tier estaba en train: misma curva SNANA, mismo $z$, mismo pico; solo cambian bandas, exposición,
+ruido y ventana. Era exactamente lo contrario de lo que ya se hacía con las KN, agrupadas por
+\code{simulation\_id} \emph{a través} de los tiers a propósito. \textbf{El arreglo es quitar el
+prefijo}; medido después, los objetos de test con gemelo en train pasan de $\sim$64\,600 a
+\textbf{0}.\\[2pt]
+\textbf{Por qué el prefijo estaba ahí, que es la pregunta de verdad:} para que los ids de deep y
+wide ``nunca colisionaran''. Pero colisionar era justo lo que se necesitaba --- el id \emph{ya} es
+único a nivel de transiente porque lleva el healpix dentro. La lección general: una clave de grupo
+namespaced por vista destruye el agrupamiento en cuanto la misma entidad tiene varias vistas.
+\end{examen}
+
+\section{Resultados}
+\label{sec:resultados}
+
+\begin{examen}
+\textbf{Aviso de procedencia.} Todos los números de esta sección son del checkpoint \emph{soup}
+entrenado sobre el split \textbf{anterior} al arreglo de la fuga entre tiers (sección
+\ref{sec:split}), en el que $\sim$81\,\% de los contaminantes de test tenía su gemelo del otro tier
+en train. \textbf{Son por tanto un techo optimista sobre la clase \code{other}} y hay que volver a
+medirlos tras el re-entrenamiento. El lado KN no está afectado: las KN siempre se agruparon por
+\code{simulation\_id} a través de los tiers.
+\end{examen}
+
+Sobre el checkpoint \emph{soup}. Split (v1): 2\,693\,804 train / 151\,915 validación / 153\,661
+test. Balance del test: 79\,885 \code{other}, 73\,776 \code{KN}.
+
+\subsection{Matriz de degradación (sin redshift)}
+\begin{center}
+\begin{tabular}{llrrrr}
+\toprule
+épocas & clase & precision & recall & F1 & accuracy \\
+\midrule
+1 & other & 0.8711 & 0.9356 & 0.9022 & \multirow{2}{*}{0.8945} \\
+1 & KN    & 0.9242 & 0.8501 & 0.8856 & \\
+\midrule
+2 & other & 0.9492 & 0.9780 & 0.9634 & \multirow{2}{*}{0.9614} \\
+2 & KN    & 0.9754 & 0.9433 & 0.9591 & \\
+\midrule
+3 & other & 0.9841 & 0.9913 & 0.9877 & \multirow{2}{*}{0.9872} \\
+3 & KN    & 0.9905 & 0.9827 & 0.9866 & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Recall de KN en el punto de operación \emph{recall-first}}
+Umbral $P(\mathrm{KN}) \ge 0.2$ en vez del $0.5$ de la matriz anterior
+(\code{THRESHOLD\_HIGH\_RECALL} en \code{run\_evaluation\_test\_only.py}).
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{sin redshift} & \multicolumn{2}{c}{con redshift} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+épocas & recall KN & contaminantes como KN & recall KN & contaminantes como KN \\
+\midrule
+1 & 0.9239 & 16\,859 & 0.9821 & 4\,927 \\
+2 & 0.9659 &  6\,494 & 0.9955 & 1\,140 \\
+3 & 0.9916 &  2\,431 & 0.9987 &   419 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Lectura: la información llega rápido --- ya con \emph{una sola época} el recall sin $z$ supera el
+92\,\%, y la tercera época divide los falsos positivos por $\sim$7. El redshift ayuda, pero
+recuérdese la advertencia del recuadro anterior: parte de esa ayuda es el atajo del prior, no
+física.
+
+\section{Apéndice: preguntas típicas}
+
+\begin{enumerate}[itemsep=3pt]
+\item \textbf{¿Por qué el denominador del ruido de lectura es $n(n+1)$?}
+      Porque se ajusta la pendiente de la rampa sobre $n$ lecturas no destructivas; con $(n+1)$ el
+      resultado es 9$\times$ mayor (55.46 vs 5.942 $\eminus$) y no reproduce la Tabla 3. Ese 5.942
+      es a los 900 s de la Tabla 3; a los 1636 s reales de F184 deep son 5.540 $\eminus$.
+
+\item \textbf{¿Por qué $\sigma_{\rm read}$ baja al aumentar la exposición?}
+      \emph{Up-the-ramp}: más tiempo $\Rightarrow$ más lecturas $\Rightarrow$ mejor estimación de la
+      pendiente. Satura en el piso $\sqrt{25}=5\ \eminus$.
+
+\item \textbf{¿Cuál es el tiempo mínimo y máximo de la grilla LANL?}
+      $0.125$ d (3 h) a $64$ d en reposo, 73 nodos logarítmicos de razón 1.0905. Pero solo 100 de
+      las 900 simulaciones llegan a 64 d: por simulación son 63--73 nodos y el último tiempo cae
+      entre 26.9 y 64 d.
+
+\item \textbf{¿Qué implica el corte de 0.125 d?}
+      Que no hay ninguna predicción para las primeras 3 horas post-merger, y en el observador ese
+      corte se estira a $0.125(1+z)$ d. Afecta sobre todo a las bandas azules, que es donde la KN
+      brilla más al principio.
+
+\item \textbf{¿Qué distingue a \code{run\_type} de \code{wind}?}
+      \code{run\_type} (TP/TS) es la \emph{morfología} del viento --- ``peanut'' o esférica --- con
+      eyecta dinámica siempre toroidal; \code{wind} (wind1/wind2) es la \emph{composición} del
+      viento, $Y_e = 0.27$ o $0.37$. La dinámica tiene $Y_e = 0.04$ fijo y no es eje de la grilla.
+
+\item \textbf{¿Por qué el ángulo de visión cambia tanto la curva?}
+      Porque la eyecta dinámica es toroidal, rica en lantánidos y opaca: por el ecuador tapa el
+      viento azul, por el polo no. Dos ángulos de la misma simulación pueden diferir en varias
+      magnitudes.
+
+\item \textbf{¿Qué es el \emph{dimming} cosmológico y cuántos factores $(1+z)$ tiene?}
+      Dilución geométrica $1/(4\pi d^2)$ más dos factores $(1+z)$ --- energía por fotón y tasa de
+      llegada --- ya absorbidos en $d_L = (1+z)d_C$. Para fuentes puntuales son \emph{dos}, no
+      cuatro; los cuatro $((1+z)^{-4})$ son del brillo superficial de fuentes extensas.
+
+\item \textbf{¿De dónde sale el factor 54 y cuánto vale en magnitudes?}
+      $4\pi/\Delta\Omega_{\rm bin}$ con bins uniformes en $\cos\theta$; $-2.5\log_{10}54 = 4.331$ mag.
+      Sin él todas las KN salían 4.33 mag demasiado débiles.
+
+\item \textbf{¿Por qué el término de fuente lleva $\alpha$ y el de fondo $\alpha^2$?}
+      Ambos llevan $\alpha^2$; en el de fuente un factor se cancela porque
+      $\mathrm{Var}_e = F_e = F_{\rm fcal}/\alpha$ (Poisson: varianza $=$ media, lineal en las
+      cuentas). El fondo ya es una varianza, así que $\alpha^2$ queda entero. No hay factor de Fano.
+
+\item \textbf{¿Por qué NEA tabulada y no \code{roman.getPSF}?}
+      La PSF analítica del Ciclo 9 de galsim sobrestima el NEA un 15--28\,\% en R/Z/Y.
+
+\item \textbf{Diferencia entre un token \code{u} y uno \code{n}.}
+      \code{u}: se miró y no se detectó $\Rightarrow$ la fuente es \emph{más débil} que el límite
+      5$\sigma$ de esa visita (información positiva). \code{n}: no se miró $\Rightarrow$ ninguna
+      información sobre el brillo, pero sí sobre la cadencia.
+
+\item \textbf{¿Por qué el límite 5$\sigma$ es por visita y no una profundidad fija de survey?}
+      Porque la profundidad realmente alcanzada es el contenido informativo de la no-detección; y
+      usar un valor fijo para las KN inyectadas convertiría el límite en un delator del pipeline.
+
+\item \textbf{¿Por qué no hay token de modo deep/wide?}
+      Lo que llevaría (la profundidad) ya está en $\sigma_m$ y en $m_{\rm lim}$ de forma continua;
+      un token de modo grabaría la rejilla del simulador en el encoder y ampliaría la brecha de
+      dominio con Roman real.
+
+\item \textbf{¿Por qué el tiempo va dentro del token y no como positional encoding?}
+      Los tokens son un \emph{conjunto}, no una secuencia. Solo con una representación continua del
+      tiempo la atención puede restar dos tokens y calcular $\Delta m/\Delta t$.
+
+\item \textbf{¿Por qué Time2Vec con 0 frecuencias?}
+      Tres épocas sobre $\sim$15 d no resuelven ninguna frecuencia, y los transientes no son
+      pulsadores. Solo el término lineal tiene contenido físico.
+
+\item \textbf{¿Por qué se selecciona por \code{val\_acc\_noz}?}
+      Ver el recuadro de la sección del transformer: KN y contaminantes son casi disjuntos en $z$,
+      así que \code{val\_acc\_z} es un artefacto del batch balanceado.
+
+\item \textbf{¿Por qué el split separa KN por \code{simulation\_id} y contaminantes por
+      \code{object\_id}?}
+      Porque el grupo tiene que ser la \emph{entidad física repetida} en cada rama. En las KN la
+      misma simulación LANL genera muchas realizaciones (ángulo, offset, $z$, paridad, ruido). En
+      los contaminantes cada transiente SNANA es único, pero se observa dos veces (deep y wide).
+      En los dos casos el grupo es global a los tiers.
+
+\item \textbf{¿Qué hace la paridad de cadencia y por qué se sortea?}
+      Fija si la primera visita es par o impar, es decir qué par de filtros se observa. Sin
+      sortearla, la clase KN quedaba marcada (92\,\% par) y la sola máscara de bandas clasificaba al
+      80.7\,\%.
+
+\item \textbf{¿Por qué el ruido se aplica en flujo y no en magnitud?}
+      Porque el ruido es gaussiano en flujo; en magnitud sería sesgado y no está definido para
+      flujos negativos (que ocurren en la cola de no-detecciones).
+
+\item \textbf{¿Por qué se guardan 4 épocas si el modelo ve 3?}
+      La cuarta es el \emph{buffer} de la augmentación de desplazamiento, que simula transientes
+      descubiertos ya con $\sim$5 d de edad.
+
+\item \textbf{¿Cómo puede el modelo clasificar con 1 época si se entrena con 3?}
+      Porque no se entrena solo con 3: el dataloader trunca cada ejemplo a 1, 2 o 3 épocas al azar
+      con probabilidad uniforme. Es la augmentación que sostiene toda la matriz de degradación.
+
+\item \textbf{¿Cuántos tokens tiene una secuencia como máximo?}
+      15 ($3$ épocas $\times$ \textbf{5} bandas del tier, no 6 --- el vocabulario de 6 es la unión de
+      deep y wide), más \code{[CLS]} y \code{[Z]}: 17 posiciones.
+
+\item \textbf{¿Qué extinción llevan tus dos clases?}
+      Los contaminantes, la del host (dentro del modelo SED de SNANA); las KN, ninguna. Ninguna de
+      las dos lleva extinción de la Vía Láctea: el catálogo trae \code{mw\_extinction\_applied} en
+      \code{False}. La cadena F99 host $+$ MW de \code{extinction.py} pertenece al CLI
+      \code{kn-extinguish}, que no genera los datos de entrenamiento.
+
+\item \textbf{Tu censo dice 1.6 millones de contaminantes. ¿Son 1.6 millones de transientes?}
+      No: son instancias por tier. Los transientes distintos son 879\,832; el fichero deep es
+      superset del wide y un mismo objeto observado en los dos cuenta dos veces, porque el
+      dataloader los trata como objetos separados.
+
+\item \textbf{¿Qué le pasa a tu split con esos objetos que están en los dos tiers?}
+      Ahora nada: el grupo es el \code{object\_id} desnudo, global a los dos tiers, igual que las
+      KN se agrupan por \code{simulation\_id} a través de los tiers. Hasta el 2 de agosto de 2026 la
+      clave llevaba prefijo de tier y $\sim$81\,\% de los contaminantes de test tenían su gemelo en
+      train; los resultados de la sección \ref{sec:resultados} son de antes del arreglo.
+
+\item \textbf{OpenUniverse ya trae kilonovas. ¿Por qué usar la grilla LANL?}
+      Porque son $\sim$2 por healpix, con modelos \code{NON1ASED.KN-K17} y \code{peak\_mag\_F}
+      $\approx$ 30: nunca alcanzan S/N$\ge$5, así que no dan estadística ni contaminan la clase
+      \emph{other}.
+
+\item \textbf{¿Por qué las magnitudes se normalizan globalmente y no por objeto?}
+      Porque el brillo aparente es señal física (junto con $z$ da la luminosidad); normalizar por
+      objeto la destruiría.
+
+\item \textbf{¿Qué aporta OpenUniverse que Hourglass no?}
+      El conjunto completo de 5--6 bandas Roman sin partición wide/deep incompleta, y una
+      estadística de contaminantes de $1.6\times10^6$ objetos. Hourglass detectó $\sim$3 KN en total.
+\end{enumerate}
+
+\section*{Fuentes dentro del repositorio}
+\addcontentsline{toc}{section}{Fuentes dentro del repositorio}
+\small
+\code{docs/plan.md} (plan científico) $\cdot$ \code{docs/hourglass\_noise\_recipe.md} (derivación de
+la receta y notas del paper) $\cdot$ \code{docs/kn\_detectability\_vs\_chase.md} (validación externa)
+$\cdot$ \code{docs/generate\_datasets.md} (runbook) $\cdot$
+\code{src/kilonova/photometry/roman\_noise.py} (constantes y primitivas) $\cdot$
+\code{src/kilonova/simulation/early\_windows.py} (ventanas, inyección KN) $\cdot$
+\code{src/kilonova/simulation/extinction.py} (extinción y fotometría sintética) $\cdot$
+\code{training/docs/*.md} (tokens, arquitectura, parámetros KN, clase \emph{other}) $\cdot$
+\code{training/model.py}, \code{training/train\_lightning.py}, \code{training/evaluation.ipynb}.
+
+\medskip
+\noindent\textbf{Externas (datos del observatorio):}
+\url{https://science.nasa.gov/mission/roman-space-telescope/} $\cdot$
+\url{https://roman.gsfc.nasa.gov/science/WFI_technical.html} (specs de la WFI) $\cdot$
+\url{https://www.stsci.edu/roman/observatory} $\cdot$ las constantes de \code{galsim.roman},
+que es la implementación que usa el pipeline.
+
+\end{document}
