@@ -1,8 +1,11 @@
 """Standalone evaluation on the test-only token cache (no train/val data available locally).
 
-Loads `openuniverse_tokens_test.npz` directly (already the full test split, 153,661 objects)
-and the normalization constants fit on train (`normalization.json`), instead of going through
-`build_dataloaders`, which needs the train/val source parquet/hdf5 files.
+Loads `openuniverse_tokens_test.npz` directly (already the full test split) and the normalization
+constants fit on train (`normalization.json`), instead of going through `build_dataloaders`, which
+needs the train/val source parquet/hdf5 files.
+
+Because this bypasses `build_dataloaders`, it also bypasses the cache-version check: the file has
+to be re-cut from the same split the checkpoint was trained on, so the version is asserted below.
 """
 
 import json
@@ -13,6 +16,7 @@ import numpy as np
 import openuniverse_data as openuniverse_data_module
 import torch
 from openuniverse_data import (
+    GROUP_KEY_VERSION,
     GROUP_ORDER,
     OpenUniverseWindowDataset,
     collate_token_windows,
@@ -46,6 +50,11 @@ print("device:", device)
 
 # ----------------------------------------------------------------------------- load test cache
 cached = np.load(f"{DATA_DIR}/openuniverse_tokens_test.npz", allow_pickle=False)
+cached_version = int(cached["group_key_version"]) if "group_key_version" in cached else 1
+assert cached_version == GROUP_KEY_VERSION, (
+    f"test cache holds group_key v{cached_version}, this revision needs v{GROUP_KEY_VERSION}. "
+    "Re-cut it from the current openuniverse_tokens.npz or the scores describe the old split."
+)
 big = {key: cached[key] for key in ["day", "band_index", "token_type_index", "mag", "sigma_mag"]}
 meta = {
     "offsets": cached["offsets"],

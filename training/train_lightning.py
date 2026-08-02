@@ -39,10 +39,12 @@ MODEL_INPUT_KEYS = [
 
 
 def class_weights_from_loader(train_loader, num_classes, mode="inverse"):
-    """Class weights from the training labels (Ia/II dominate, other rare).
+    """Class weights from the training labels. The binary task is close to balanced (~1.60M
+    `other` vs ~1.40M KN), so all three modes land near 1.0; the knob survives from the
+    multi-class version, where `other` classes spanned four orders of magnitude.
 
-    mode='inverse'  -> full inverse-frequency (aggressive; pushes the rare `other` hard).
-    mode='sqrt'     -> sqrt of inverse-frequency (softer; recovers II without dropping `other`).
+    mode='inverse'  -> full inverse-frequency (aggressive; pushes the rare class hard).
+    mode='sqrt'     -> sqrt of inverse-frequency (softer).
     mode='none'     -> uniform weights (plain accuracy objective).
     """
     counts = torch.zeros(num_classes)
@@ -134,8 +136,8 @@ class LitKilonova(L.LightningModule):
             self.log(f"val_acc_{name}", value)
 
         # split the regimes by redshift availability (names are '{epochs}ep_z' / '{epochs}ep_noz').
-        # with-z drives model selection (early stopping + checkpoint); no-z is the honest
-        # "how it looks without redshift" number we watch but do not optimize for.
+        # val_acc_noz drives model selection (early stopping + checkpoint), see the note in
+        # train(); val_acc_z is logged but never optimized for.
         z_values = [v for name, v in regime_accuracies.items() if not name.endswith("noz")]
         noz_values = [v for name, v in regime_accuracies.items() if name.endswith("noz")]
         balanced = torch.stack(list(regime_accuracies.values())).mean()
@@ -238,9 +240,10 @@ def train(
     print(f"model parameters: {number_of_parameters:,}")
 
     # select on val_acc_noz (no-redshift), the honest metric: KN and contaminants are nearly
-    # disjoint in z (KN capped at z=0.4, contaminants peak at z~1.25), so val_acc_z=1.0 is a
-    # redshift population artifact, not real skill. z is still fed to the model as an optional
-    # feature in training; we just don't let it drive model selection.
+    # disjoint in z (KN median z=0.09, p95~0.5 with a tail out to z=1; contaminants reach z~3), so
+    # val_acc_z=1.0 is a redshift population artifact of the balanced batch, not real skill. z is
+    # still fed to the model as an optional feature in training; we just don't let it drive model
+    # selection.
     # save the top-5 so we can average their weights (model soup) instead of trusting a single
     # best epoch, which can be a lucky-validation outlier.
     checkpoint_callback = ModelCheckpoint(

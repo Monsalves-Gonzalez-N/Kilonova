@@ -14,17 +14,20 @@ TDE, SLSN-I, PISN). deep and wide are COMBINED into one model over a 6-band voca
 (R062, Z087, Y106, J129, H158, F184); a band a given tier never observes is simply absent
 (it never produces a token), exactly like a real missing band.
 
-Leakage control:
-    * KN  -> split by `simulation_id` (the physical ejecta model), read off the first field of the
+Leakage control: nothing is split per object, always per GROUP, and groups are GLOBAL across the
+deep/wide files, because both tiers observe the same underlying transient.
+    * KN  -> group = `simulation_id` (the physical ejecta model), read off the first field of the
       kn_object_id. 900 models each spawn many realizations (x angle_index x redshift x noise); a
-      model must live in exactly one split, GLOBAL across deep+wide (the same simulation_id appears
-      in both tiers).
-    * contaminants -> split by `object_id`, stratified by original class. There is NO usable
-      template id in the parquet: `snana_id` has only 33 values and all 33 span every class, so
-      it is a SNANA batch/file id, not the SED model. SALT2 Ia are continuous (no template
-      leakage); SNANA core-collapse draw from a finite SED template library that is NOT recorded
-      here, so template-level leakage among CC cannot be blocked from these files. (Object-level
-      split is the best available; flag this if CC template leakage matters.)
+      model must live in exactly one split.
+    * contaminants -> group = `object_id`, stratified by original class. The deep file is a
+      superset of the wide one: 717,863 of the 717,864 wide transients also appear in deep with
+      the SAME object_id, so grouping is what keeps the two views of one SNANA light curve on the
+      same side of the split. There is NO usable template id in the parquet: `snana_id` has only
+      33 values and all 33 span every class, so it is a SNANA batch/file id (healpix), not the SED
+      model. SALT2 Ia are continuous (no template leakage); SNANA core-collapse draw from a finite
+      SED template library that is NOT recorded here, so template-level leakage among CC cannot be
+      blocked from these files. (Object-level grouping is the best available; flag this if CC
+      template leakage matters.)
 
 Output contract: collated batch dict with the keys KilonovaTransformer.forward() consumes
 (see docs/token_definitions.md), plus GROUP_ORDER / regime-loader metadata for
@@ -88,6 +91,13 @@ GLOBAL_KEYS = ["redshift", "has_redshift"]
 
 SHIFT_PROBABILITY = 0.20  # slide the window forward by one epoch (late-onset sim)
 REDSHIFT_DROPOUT_PROBABILITY = 0.50  # hide z from the model -> learned [NO_Z] token
+
+# Bumped whenever the meaning of meta['group_key'] changes, so a token cache written by an older
+# revision is rebuilt instead of silently reproducing its split.
+#   v1: contaminant groups were tier-namespaced (deep_<id> / wide_<id>) -> the two tiers of one
+#       transient landed in independent splits.
+#   v2: contaminant groups are the bare object_id, global across tiers.
+GROUP_KEY_VERSION = 2
 
 # Magnitude normalization, fit on the TRAIN split inside build_dataloaders (module globals).
 MAG_MEAN = None
@@ -188,21 +198,23 @@ def _read_long_parquet(path, group_key_from_ids):
     return big, counts, meta
 
 
-def _read_contaminants_parquet(path, tier):
-    """OpenUniverse contaminants. Split by object: group_key = object_id, tier-namespaced so deep
-    and wide ids never collide."""
-    return _read_long_parquet(path, lambda ids: np.array([f"{tier}_{i}" for i in ids]))
+def _read_contaminants_parquet(path, tier):  # tier unused: groups are deliberately not namespaced
+    """OpenUniverse contaminants. Group by transient: group_key = object_id, which is already
+    global (`snana_{healpix}_{snana_object_id}`). NO tier prefix: the deep file is a superset of
+    the wide one, so the same transient appears in both with the same id and its two views must
+    stay a single group across the two files -- same underlying SNANA light curve, same z, same
+    peak; only bands, exposure, noise and window differ."""
+    return _read_long_parquet(path, lambda ids: np.asarray(ids, dtype=str))
 
 
-def _read_kn_parquet(path, tier):  # tier unused: KN groups are deliberately not tier-namespaced
+def _read_kn_parquet(path, tier):  # tier unused: KN groups are deliberately not namespaced
     """Kilonovas from kn_windows_{tier}.parquet.
 
-    Split by the LANL ejecta model, not by object: one simulation spawns many realizations
-    (x angle x redshift x noise) and all of them have to land in the same split, or the model sees
-    the same SED in train and test. kn_object_id is
-    `{simulation_id}_{angle_index}_{offset:.4f}_{z:.4f}` (kilonova.simulation.early_windows), so the
-    first field is that simulation_id. NO tier prefix here, unlike the contaminants: the same
-    simulation is observed by both tiers and must stay a single group across the two files."""
+    Group by the LANL ejecta model, not by object: one simulation spawns many realizations
+    (x angle x redshift x offset x parity x noise) and all of them have to land in the same split,
+    or the model sees the same SED in train and test. kn_object_id is
+    `{simulation_id}_{angle_index}_{offset:.4f}_{z:.4f}_{cadence_parity}_{noise_id}`
+    (kilonova.simulation.early_windows), so the first field is that simulation_id."""
     return _read_long_parquet(path, lambda ids: np.array([f"sim_{i.split('_')[0]}" for i in ids]))
 
 
@@ -252,23 +264,29 @@ def _assemble(kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=True
 
 def _load_or_build(cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=True):
     if cache_path and os.path.exists(cache_path):
-        if verbose:
-            print(f"loading cached tokens from {cache_path}")
         cached = np.load(cache_path, allow_pickle=False)
-        big = {k: cached[k] for k in ["day", "band_index", "token_type_index", "mag", "sigma_mag"]}
-        meta = {
-            "offsets": cached["offsets"],
-            "orig_label": cached["orig_label"],
-            "redshift": cached["redshift"],
-            "group_key": cached["group_key"],
-            "is_kn": cached["is_kn"],
-        }
-        return big, meta
+        cached_version = int(cached["group_key_version"]) if "group_key_version" in cached else 1
+        if cached_version == GROUP_KEY_VERSION:
+            if verbose:
+                print(f"loading cached tokens from {cache_path}")
+            big = {k: cached[k] for k in ["day", "band_index", "token_type_index", "mag", "sigma_mag"]}
+            meta = {
+                "offsets": cached["offsets"],
+                "orig_label": cached["orig_label"],
+                "redshift": cached["redshift"],
+                "group_key": cached["group_key"],
+                "is_kn": cached["is_kn"],
+            }
+            return big, meta
+        print(
+            f"cache {cache_path} holds group_key v{cached_version}, this revision needs "
+            f"v{GROUP_KEY_VERSION} -- rebuilding (its split is not reproducible from here)"
+        )
     if verbose:
         print("assembling tokens from source files...")
     big, meta = _assemble(kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=verbose)
     if cache_path:
-        np.savez(cache_path, **big, **meta)
+        np.savez(cache_path, **big, **meta, group_key_version=GROUP_KEY_VERSION)
         if verbose:
             print(f"cached tokens to {cache_path}")
     return big, meta
@@ -276,49 +294,43 @@ def _load_or_build(cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_w
 
 # ----------------------------------------------------------------------------- split
 def _leakage_aware_split(meta, fractions, random_seed):
-    """Train/val/test object indices. KN: grouped by simulation_id (a model lands in one split).
-    Contaminants: by object, stratified by original class. Both 90/5/5 by default."""
+    """Train/val/test object indices, 90/5/5 by default. Whole GROUPS are carved, never objects:
+    KN group = simulation_id (a LANL ejecta model lands in one split), contaminant group =
+    object_id (a transient lands in one split, both tiers together). Contaminants are additionally
+    stratified by original class; the KN pool is carved as a single group population.
+
+    The fractions apply to the group counts, so the resulting object counts drift a little from
+    90/5/5 -- groups have unequal numbers of objects (a contaminant seen in both tiers weighs 2,
+    one seen only in deep weighs 1)."""
     rng = np.random.default_rng(random_seed)
     train_fraction, validation_fraction, _ = fractions
     is_kn = meta["is_kn"]
     group_key = meta["group_key"]
     orig_label = meta["orig_label"]
-    n_objects = len(is_kn)
-    index = np.arange(n_objects)
+    index = np.arange(len(is_kn))
 
     train, validation, test = [], [], []
 
-    def carve(object_indices):
-        object_indices = object_indices.copy()
-        rng.shuffle(object_indices)
-        n = len(object_indices)
-        n_train = int(round(train_fraction * n))
-        n_validation = int(round(validation_fraction * n))
-        train.append(object_indices[:n_train])
-        validation.append(object_indices[n_train : n_train + n_validation])
-        test.append(object_indices[n_train + n_validation :])
+    def carve_groups(object_indices):
+        unique_groups, group_code = np.unique(group_key[object_indices], return_inverse=True)
+        shuffled = rng.permutation(len(unique_groups))
+        n_train = int(round(train_fraction * len(unique_groups)))
+        n_validation = int(round(validation_fraction * len(unique_groups)))
+        split_of_group = np.empty(len(unique_groups), dtype=np.int8)
+        split_of_group[shuffled[:n_train]] = 0
+        split_of_group[shuffled[n_train : n_train + n_validation]] = 1
+        split_of_group[shuffled[n_train + n_validation :]] = 2
+        split_of_object = split_of_group[group_code]
+        train.append(object_indices[split_of_object == 0])
+        validation.append(object_indices[split_of_object == 1])
+        test.append(object_indices[split_of_object == 2])
 
-    # KN: split the unique simulation_ids, then assign all objects of each model to that split.
-    kn_index = index[is_kn]
-    kn_groups = group_key[kn_index]
-    unique_models = np.unique(kn_groups)
-    rng.shuffle(unique_models)
-    n_models = len(unique_models)
-    n_train_models = int(round(train_fraction * n_models))
-    n_validation_models = int(round(validation_fraction * n_models))
-    train_models = set(unique_models[:n_train_models])
-    validation_models = set(unique_models[n_train_models : n_train_models + n_validation_models])
-    in_train = np.array([g in train_models for g in kn_groups])
-    in_validation = np.array([g in validation_models for g in kn_groups])
-    train.append(kn_index[in_train])
-    validation.append(kn_index[in_validation])
-    test.append(kn_index[~(in_train | in_validation)])
+    carve_groups(index[is_kn])
 
-    # contaminants: split by object, stratified within each original class
     contaminant_index = index[~is_kn]
     contaminant_labels = orig_label[contaminant_index]
     for class_name in np.unique(contaminant_labels):
-        carve(contaminant_index[contaminant_labels == class_name])
+        carve_groups(contaminant_index[contaminant_labels == class_name])
 
     return (np.concatenate(train), np.concatenate(validation), np.concatenate(test))
 
@@ -474,10 +486,15 @@ def build_dataloaders(
     assert len(np.intersect1d(train_index, validation_index)) == 0
     assert len(np.intersect1d(train_index, test_index)) == 0
     assert len(np.intersect1d(validation_index, test_index)) == 0
-    # no KN simulation_id may straddle splits
-    kn_models_train = set(meta["group_key"][train_index[meta["is_kn"][train_index]]])
-    kn_models_test = set(meta["group_key"][test_index[meta["is_kn"][test_index]]])
-    assert len(kn_models_train & kn_models_test) == 0, "KN model leaked between train and test"
+    # no group may straddle two splits: neither a KN simulation_id nor a contaminant object_id
+    # (the latter is what the tier-namespaced v1 group key silently allowed).
+    for name, left, right in (
+        ("train/validation", train_index, validation_index),
+        ("train/test", train_index, test_index),
+        ("validation/test", validation_index, test_index),
+    ):
+        straddling = np.intersect1d(meta["group_key"][left], meta["group_key"][right])
+        assert len(straddling) == 0, f"{len(straddling)} groups leaked across {name}: {straddling[:5]}"
 
     # fit magnitude normalization on TRAIN detection tokens only
     offsets = meta["offsets"]
