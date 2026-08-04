@@ -50,11 +50,14 @@ data/openuniverse/*.hdf5.*
 data/openuniverse/*.npz.*
 !data/openuniverse/*.npz.dvc
 data/openuniverse/normalization.json.stale-*
-# Los dos caches de tokens son derivados (los reconstruye training/openuniverse_data.py con
-# split_seed=42), pero se versionan por DVC igual: rehacer 1.2 GB en la otra maquina cuesta mas
-# que bajarlos, y asi el split evaluado es literalmente el mismo bit a bit.
+# Cache de tokens completa (1.2 GB): derivada (la reconstruye training/openuniverse_data.py con
+# split_seed=42), pero versionada por DVC igual, porque rehacerla en la otra maquina cuesta mas
+# que bajarla y asi el split es el mismo bit a bit.
 data/openuniverse/openuniverse_tokens.npz
-data/openuniverse/openuniverse_tokens_test.npz
+# El recorte solo-test (60 MB) NO se ignora: va en git a proposito. Es lo unico que necesita la
+# maquina de solo-lectura para correr run_evaluation_test_only.py, y en git llega con el mismo
+# git pull que trae el checkpoint, sin esperar a que el demonio de Dropbox replique el remote DVC.
+# Excepcion consciente a la regla de tamano: 60 MB pasa el umbral de aviso de GitHub (50 MB).
 
 # Generated figure PDFs, reference papers and local caches
 data/openuniverse/*.pdf

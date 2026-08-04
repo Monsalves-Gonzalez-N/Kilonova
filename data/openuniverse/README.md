@@ -14,9 +14,18 @@ entrenamiento.
 | `openuniverse_tokens.npz` | caché de tokens (`group_key` v2, split por transiente) | `training/openuniverse_data.py`, 2026-08-02 |
 | `openuniverse_tokens_test.npz` | recorte solo-test de la anterior | `training/run_evaluation_test_only.py`, 2026-08-02 |
 
-Los dos `.npz` son derivados y el pipeline los reconstruye solo, pero desde el **2026-08-04 están
-en DVC** (`dvc add`, remote `dropbox`): rehacer 1.2 GB en la otra máquina cuesta más que bajarlos, y
-bajándolos el split evaluado es el mismo bit a bit en vez de solo el mismo `split_seed=42`.
+Los dos `.npz` son derivados y el pipeline los reconstruye solo, pero desde el **2026-08-04 se
+versionan igual**: bajándolos, el split evaluado es el mismo bit a bit en vez de solo el mismo
+`split_seed=42`. Van por caminos distintos a propósito:
+
+- `openuniverse_tokens.npz` (1.2 GB) → **DVC**, remote `dropbox`. Solo hace falta para entrenar o
+  para `evaluation.ipynb`.
+- `openuniverse_tokens_test.npz` (60 MB) → **git**. Es lo único que necesita la máquina de
+  solo-lectura para correr `run_evaluation_test_only.py`, y así llega con el mismo `git pull` que
+  trae `kilonova_transformer-soup.ckpt` y `normalization.json`, sin depender de que el demonio de
+  Dropbox haya terminado de replicar el remote DVC. Es una excepción consciente a la regla de
+  tamaño de `CLAUDE.md`: 60 MB pasa el umbral de aviso de GitHub (50 MB), aunque no el de rechazo
+  (100 MB).
 
 Las magnitudes de los contaminantes vienen del snana de OpenUniverse, que ya trae la
 K-corrección y todo lo demás incorporado; este pipeline solo les aplica la receta de ruido y la
