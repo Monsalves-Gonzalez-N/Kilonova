@@ -63,6 +63,9 @@ docs/papers/
 # Training weights and Lightning logs — too heavy for git (track via DVC if needed)
 training/checkpoints/
 training/lightning_logs/
+# Salida cruda de las corridas (decenas de MB de barras de progreso): las metricas que importan
+# quedan en el mensaje del commit y en training/plots/
+training/*.log
 
 # Subproductos de compilacion de LaTeX (el .tex y el .pdf si se versionan)
 docs/*.aux
