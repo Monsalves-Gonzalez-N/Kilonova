@@ -1,0 +1,5 @@
+outs:
+- md5: da31a015970be5bab356ea155aeab3c6
+  size: 1213178574
+  hash: md5
+  path: openuniverse_tokens.npz

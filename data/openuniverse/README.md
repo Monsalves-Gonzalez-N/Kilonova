@@ -11,6 +11,12 @@ entrenamiento.
 |---|---|---|
 | `early_windows_{deep,wide}.parquet` | contaminantes OpenUniverse (SN, TDE, SLSN, PISN) | `kn-run-openuniverse`, 2026-07-28 |
 | `kn_windows_{deep,wide}.parquet` | kilonovas LANL inyectadas | `kn-kilonova-windows`, 2026-07-30 (2ª corrida del día: paridad de cadencia) |
+| `openuniverse_tokens.npz` | caché de tokens (`group_key` v2, split por transiente) | `training/openuniverse_data.py`, 2026-08-02 |
+| `openuniverse_tokens_test.npz` | recorte solo-test de la anterior | `training/run_evaluation_test_only.py`, 2026-08-02 |
+
+Los dos `.npz` son derivados y el pipeline los reconstruye solo, pero desde el **2026-08-04 están
+en DVC** (`dvc add`, remote `dropbox`): rehacer 1.2 GB en la otra máquina cuesta más que bajarlos, y
+bajándolos el split evaluado es el mismo bit a bit en vez de solo el mismo `split_seed=42`.
 
 Las magnitudes de los contaminantes vienen del snana de OpenUniverse, que ya trae la
 K-corrección y todo lo demás incorporado; este pipeline solo les aplica la receta de ruido y la
@@ -23,6 +29,7 @@ ventana. Por eso **ningún fix de la fotometría sintética los toca** — esa f
 |---|---|
 | `kn_windows_{deep,wide}.parquet.cadence-parity-leak` | la fuga de paridad de la cadencia de más abajo (1ª corrida del 2026-07-30, la del factor angular) |
 | `openuniverse_tokens.npz.stale-2026-07-30` | caché de tokens construida sobre esos parquets |
+| `openuniverse_tokens_test.npz.stale-group-key-v1` | recorte de test con el split viejo, agrupado por `(tier, transiente)` en vez de por transiente |
 
 ## Superado — **borrado el 2026-07-30** (30 GB)
 

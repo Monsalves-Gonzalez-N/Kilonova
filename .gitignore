@@ -48,10 +48,12 @@ data/openuniverse/*.parquet.*
 data/openuniverse/*.hdf5.*
 !data/openuniverse/*.hdf5.dvc
 data/openuniverse/*.npz.*
+!data/openuniverse/*.npz.dvc
 data/openuniverse/normalization.json.stale-*
-# Cache de tokens completa (~800 MB): derivada, la reconstruye training/openuniverse_data.py
+# Los dos caches de tokens son derivados (los reconstruye training/openuniverse_data.py con
+# split_seed=42), pero se versionan por DVC igual: rehacer 1.2 GB en la otra maquina cuesta mas
+# que bajarlos, y asi el split evaluado es literalmente el mismo bit a bit.
 data/openuniverse/openuniverse_tokens.npz
-# Cache de tokens solo-test (65 MB): derivada del cache completo, la recorta el split de test
 data/openuniverse/openuniverse_tokens_test.npz
 
 # Generated figure PDFs, reference papers and local caches
