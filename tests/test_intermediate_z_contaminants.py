@@ -20,11 +20,16 @@ from kilonova.simulation.intermediate_z_contaminants import (
     CLASS_FRACTION,
     GENTYPE_BY_LABEL,
     IZC_GENTYPE_OFFSET,
-    PEAK_ABSOLUTE_MAGNITUDE,
+    MODEL_FLUX_FLOOR_MAGNITUDE,
+    SN_II_SUBTYPE_FRACTION,
     SOURCES_BY_LABEL,
     build_izc_windows,
     draw_population,
+    iax_shape_parameters,
+    iax_source,
+    register_sources,
     roman_light_curve,
+    sample_iax_absolute_magnitude,
     saturation_magnitude,
 )
 
@@ -36,12 +41,94 @@ def test_class_fraction_is_a_distribution():
     assert all(fraction > 0 for fraction in CLASS_FRACTION.values())
 
 
+def test_class_fraction_is_uniform_over_the_openuniverse_classes():
+    """Equal share per class the classifier sees, with SN II split by subtype inside its own share.
+
+    Pinned because it is a deliberate departure from OpenUniverse's mix: anyone who "fixes" this
+    back to volumetric fractions reintroduces the low-redshift majority class the sample exists to
+    avoid handing the model."""
+    share_by_class = {}
+    for label, fraction in CLASS_FRACTION.items():
+        share_by_class.setdefault("SN II" if label in SN_II_SUBTYPE_FRACTION else label, 0.0)
+        share_by_class["SN II" if label in SN_II_SUBTYPE_FRACTION else label] += fraction
+    assert len(share_by_class) == 5
+    for label, share in share_by_class.items():
+        assert share == pytest.approx(0.2, abs=1e-9), (label, share)
+    for subtype, fraction in SN_II_SUBTYPE_FRACTION.items():
+        assert CLASS_FRACTION[subtype] == pytest.approx(0.2 * fraction, abs=1e-9)
+
+
 def test_every_generated_class_is_fully_specified():
-    """A class that can be drawn must have sources, a luminosity function and a gentype."""
+    """A class that can be drawn must have sources, a luminosity function and a gentype.
+
+    The luminosity function is checked by drawing from it rather than by membership in
+    PEAK_ABSOLUTE_MAGNITUDE: SN Iax does not appear there, because Jha & Dai's is a linear law with
+    Gaussian rolloffs and no (median, sigma) exists to put in that table."""
+    random_generator = np.random.default_rng(0)
     for label in CLASS_FRACTION:
         assert SOURCES_BY_LABEL.get(label), label
-        assert label in PEAK_ABSOLUTE_MAGNITUDE, label
         assert label in GENTYPE_BY_LABEL, label
+        population = draw_population(8, np.full(8, 0.1), random_generator)
+    drawn = {
+        realization["label"] for realization in draw_population(400, np.full(400, 0.1), random_generator)
+    }
+    assert drawn == set(CLASS_FRACTION), drawn.symmetric_difference(CLASS_FRACTION)
+    for realization in population:
+        assert np.isfinite(realization["peak_absolute_magnitude"]), realization["label"]
+
+
+def test_iax_luminosity_function_matches_jha_and_dai():
+    """The published law spans M_V = -13 to -18 with rolloffs, not a Gaussian.
+
+    `Iax-model.ipynb` prints "fraction brighter than -17.5" for its own 1001-object draw; the
+    distribution here has to reproduce that shape, not merely be finite."""
+    random_generator = np.random.default_rng(4)
+    magnitudes = sample_iax_absolute_magnitude(random_generator, 200000)
+    assert -20.0 <= magnitudes.min() and magnitudes.max() <= -11.0
+    # Iax-model.ipynb prints 0.2318 for this fraction from a 1001-object draw.
+    assert 0.20 < np.mean(magnitudes < -17.5) < 0.27
+    assert -17.0 < np.median(magnitudes) < -15.0
+    assert np.mean(magnitudes > -14.0) > np.mean(magnitudes < -18.0)
+
+
+# (rise time, dm15B, dm15R) asked for, and the dm15B/dm15R Iax-model.ipynb reports after warping.
+# Row one is the unwarped SN 2005hk SED, whose values the notebook prints as its inputs; it pins
+# the base SED and its z/y smoothing, not just the warp.
+IAX_NOTEBOOK_ROUND_TRIP = [
+    (15.0000, 1.61714, 0.118087, 1.61714, 0.118087),
+    (14.3271, 1.74331, 0.903555, 1.74642, 0.903997),
+    (8.6317, 2.37500, 0.791852, 2.37445, 0.791813),
+    (7.0824, 1.78634, 1.057413, 1.78982, 1.057959),
+    (10.8090, 1.62789, 0.916287, 1.63142, 0.916850),
+    (18.1049, 1.15467, 0.370067, 1.15796, 0.370559),
+]
+
+
+@pytest.mark.parametrize(
+    ("rise_time", "decline_b", "decline_r", "expected_b", "expected_r"), IAX_NOTEBOOK_ROUND_TRIP
+)
+def test_iax_warp_reproduces_the_published_model(rise_time, decline_b, decline_r, expected_b, expected_r):
+    """The warped SED has to land where Jha & Dai's own notebook lands, not merely somewhere.
+
+    This is what makes the izc SN Iax the same model as OpenUniverse's rather than a lookalike, and
+    it is the check that would catch a regression in the interp2d replacement (see
+    IAX_WARP_ANCHORS_AA) or in the base SED repacking."""
+    sncosmo = pytest.importorskip("sncosmo")
+    model = sncosmo.Model(source=iax_source(rise_time, decline_b, decline_r))
+    measured_b = model.bandmag("bessellb", "vega", 15.0) - model.bandmag("bessellb", "vega", 0.0)
+    measured_r = model.bandmag("bessellr", "vega", 15.0) - model.bandmag("bessellr", "vega", 0.0)
+    assert measured_b == pytest.approx(expected_b, abs=1e-3)
+    assert measured_r == pytest.approx(expected_r, abs=1e-3)
+
+
+def test_iax_shape_parameters_follow_the_width_luminosity_relation():
+    """A faint SN Iax rises faster and declines faster; that is the whole content of the model."""
+    random_generator = np.random.default_rng(1)
+    bright = np.array([iax_shape_parameters(-18.0, random_generator) for _ in range(400)])
+    faint = np.array([iax_shape_parameters(-14.0, random_generator) for _ in range(400)])
+    assert bright[:, 0].mean() > faint[:, 0].mean()  # rise time
+    assert bright[:, 1].mean() < faint[:, 1].mean()  # dm15(B)
+    assert bright[:, 2].mean() < faint[:, 2].mean()  # dm15(R)
 
 
 def test_izc_gentypes_stay_separable_from_the_openuniverse_ones():
@@ -70,6 +157,7 @@ def test_listed_sources_exist_and_cover_the_roman_bands():
     sncosmo = pytest.importorskip("sncosmo")
     from kilonova.photometry.roman_noise import roman_bandpasses
 
+    register_sources()  # IAX_SOURCE_NAME is registered on demand, not at import
     bandpasses = roman_bandpasses()
     lowest_redshift = 1.02
     required_blue = bandpasses["R062"].blue_limit * 10 / lowest_redshift
@@ -129,3 +217,47 @@ def test_windows_carry_the_izc_gentype_and_the_openuniverse_label():
     assert (windows["gentype"] > IZC_GENTYPE_OFFSET).all()
     assert windows["object_id"].str.startswith("izc_").all()
     assert (windows["z_CMB"] >= 0.05).all() and (windows["z_CMB"] <= 0.15).all()
+
+
+def test_a_window_never_carries_a_band_the_sed_does_not_cover():
+    """`salt2-extended` has no flux redward of Y106 before rest-frame phase -10.
+
+    Its NIR magnitudes there are ~59, finite and therefore invisible to the isfinite check that
+    used to be the only guard; 24 % of the SN Ia of a matched pilot reached the window with H158
+    and F184 near 60, a "very red, no near-infrared" shape nothing in the sky produces."""
+    pytest.importorskip("sncosmo")
+    random_generator = np.random.default_rng(11)
+    redshifts = random_generator.uniform(0.02, 0.1, 40)
+    population = draw_population(40, redshifts, random_generator)
+    windows, _ = build_izc_windows(population, "deep")
+    assert len(windows)
+    assert windows["mag_true"].max() < MODEL_FLUX_FLOOR_MAGNITUDE
+
+
+def test_the_first_phase_of_a_type_ia_clears_the_salt2_near_infrared_gap():
+    pytest.importorskip("sncosmo")
+    realization = {
+        "index": 0,
+        "label": "SN Ia",
+        "source_name": "salt2-extended",
+        "peak_absolute_magnitude": -19.404,
+        "redshift": 0.05,
+        "cadence_parity": 0,
+        "salt2_x1": 0.0,
+        "salt2_c": 0.0,
+    }
+    curves = roman_light_curve(realization)
+    first_rest_frame_day = curves["F184"][0][0] / 1.05
+    assert first_rest_frame_day >= -11.0, first_rest_frame_day
+
+
+def test_izc_windows_carry_a_resolvable_label():
+    """IZC_GENTYPE_OFFSET pushes the gentype out of GENTYPE_LABEL, which used to leave every izc
+    window labelled UNKNOWN and made any per-class diagnostic impossible."""
+    pytest.importorskip("sncosmo")
+    random_generator = np.random.default_rng(12)
+    population = draw_population(30, np.full(30, 0.06), random_generator)
+    windows, _ = build_izc_windows(population, "deep")
+    assert "UNKNOWN" not in set(windows["label"])
+    assert set(windows["label"]) <= {"SN Ia", "SN Iax", "SN Ib", "SN Ic", "SN II"}
+    assert set(windows["izc_subtype"]) <= set(CLASS_FRACTION)
