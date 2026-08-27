@@ -95,5 +95,10 @@ data/at2017gfo/AT2017gfo/
 data/at2017gfo/*.parquet
 data/at2017gfo/*.pdf
 
+# Los ficheros del release de ENGRAVE se versionan tal cual salen del archivo: el hook de
+# trailing-whitespace los reescribiria, y un .dat de columnas fijas no es nuestro para reformatear.
+data/at2017gfo/AT2017gfo_phot_compiled_sjs.dat
+data/at2017gfo/README.txt
+
 # Cache de VizieR de la tabla 3 de Villar+2017: se vuelve a bajar sola si falta.
 data/at2017gfo/villar2017_table3.csv
