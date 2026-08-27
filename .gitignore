@@ -100,5 +100,10 @@ data/at2017gfo/*.pdf
 data/at2017gfo/AT2017gfo_phot_compiled_sjs.dat
 data/at2017gfo/README.txt
 
+# Los dos GIFs que pasan el limite de 5 MB del hook. Los regeneran sus scripts
+# (make_galaxy_angular_size_gif.py, make_galaxy_band_cube_gif.py).
+data/openuniverse/galaxy_angular_size_vs_redshift.gif
+data/openuniverse/galaxy_band_cube_vs_redshift.gif
+
 # Cache de VizieR de la tabla 3 de Villar+2017: se vuelve a bajar sola si falta.
 data/at2017gfo/villar2017_table3.csv

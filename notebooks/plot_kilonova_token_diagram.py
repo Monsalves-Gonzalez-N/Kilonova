@@ -14,9 +14,9 @@ example here is chosen deliberately from the LANL grid: the "massive, fast eject
 kilonova_examples.png, the brightest of the four grid extremes) seen face-on, redshifted to
 z=0.03. Its photometry is computed with the same recipe as plot_kilonova_examples.py
 (``photometry_for_angle``, parametrised here on redshift instead of that script's module-level
-constant). The per-epoch "observed" mask (which band gets skipped at which visit) is copied from
-a real deep-tier injection (kilonova_windows_demo.hdf5 group "9") so the cadence stays realistic
-even though the brightness is picked by hand.
+constant). The per-epoch "observed" mask (which band gets skipped at which visit) follows the deep
+tier's real cadence rule (``bands_observed_at_visit`` in ``kilonova.photometry.roman_noise``) so it
+stays realistic even though the brightness is picked by hand.
 """
 
 import matplotlib.pyplot as plt
@@ -43,29 +43,30 @@ from kilonova.simulation.early_windows import (
     load_simulation_spectra,
 )
 
-REDSHIFT = 0.05
+REDSHIFT = 0.2
 NOISE_SEED = 20260722
 TIER = "deep"
-ANGLE_INDEX = 0  # face-on: brightest viewing angle
+ANGLE_INDEX = 20  # off-axis viewing angle, for a different-looking event than the face-on default
 EJECTA_PARAMETERS = dict(mass_dynamical=0.1, velocity_dynamical=0.3, mass_wind=0.1, velocity_wind=0.3)
 EJECTA_RUN_TYPE, EJECTA_WIND = "TS", "wind1"
 
-# Deep-tier visit cadence copied from a real injection (kilonova_windows_demo.hdf5 group "9"):
-# which (band, epoch) pairs the survey actually visited, independent of what the source is doing.
+# Deep-tier visit cadence from bands_observed_at_visit (kilonova.photometry.roman_noise): anchor
+# Z087 at every visit, the other four bands in consecutive pairs -- ZYJ at even visits, ZHF at odd
+# ones -- reproducing the published HLTDS deep sequence.
 CADENCE_MASK = {
-    ("F184", 0.0): True,
+    ("F184", 0.0): False,
     ("H158", 0.0): False,
     ("J129", 0.0): True,
-    ("Y106", 0.0): False,
+    ("Y106", 0.0): True,
     ("Z087", 0.0): True,
     ("F184", 5.0): True,
-    ("H158", 5.0): False,
-    ("J129", 5.0): True,
+    ("H158", 5.0): True,
+    ("J129", 5.0): False,
     ("Y106", 5.0): False,
     ("Z087", 5.0): True,
     ("F184", 10.0): False,
-    ("H158", 10.0): True,
-    ("J129", 10.0): False,
+    ("H158", 10.0): False,
+    ("J129", 10.0): True,
     ("Y106", 10.0): True,
     ("Z087", 10.0): True,
 }
@@ -168,6 +169,7 @@ def token_types(example):
 
 
 NOT_OBSERVED_STEP_MAG = 0.2  # vertical spacing between stacked "not observed" squares
+NOT_OBSERVED_BASE_OFFSET_MAG = 0.25  # extra headroom above the brightest detection before stacking starts
 
 
 def plot_light_curve(ax, example, band_order):
@@ -224,7 +226,7 @@ def plot_light_curve(ax, example, band_order):
         for rank, index in enumerate(not_observed_indices, start=1):
             ax.scatter(
                 epoch,
-                brightest_mag - rank * NOT_OBSERVED_STEP_MAG,
+                brightest_mag - NOT_OBSERVED_BASE_OFFSET_MAG - rank * NOT_OBSERVED_STEP_MAG,
                 marker="s",
                 s=61,
                 color=BAND_COLORS[example["band"][index]],
