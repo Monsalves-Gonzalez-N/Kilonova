@@ -25,6 +25,8 @@ from kilonova.simulation.intermediate_z_contaminants import (
     PREFERRED_IA_SOURCE,
     SN_II_SUBTYPE_FRACTION,
     SOURCES_BY_LABEL,
+    UNIFORM_CLASS_SHARE,
+    _tde_templates,
     build_izc_windows,
     draw_population,
     iax_shape_parameters,
@@ -33,6 +35,8 @@ from kilonova.simulation.intermediate_z_contaminants import (
     roman_light_curve,
     sample_iax_absolute_magnitude,
     saturation_magnitude,
+    tde_peak_absolute_magnitudes,
+    tde_template_count,
 )
 
 galsim = pytest.importorskip("galsim")
@@ -53,11 +57,11 @@ def test_class_fraction_is_uniform_over_the_openuniverse_classes():
     for label, fraction in CLASS_FRACTION.items():
         share_by_class.setdefault("SN II" if label in SN_II_SUBTYPE_FRACTION else label, 0.0)
         share_by_class["SN II" if label in SN_II_SUBTYPE_FRACTION else label] += fraction
-    assert len(share_by_class) == 5
+    assert len(share_by_class) == 6
     for label, share in share_by_class.items():
-        assert share == pytest.approx(0.2, abs=1e-9), (label, share)
+        assert share == pytest.approx(UNIFORM_CLASS_SHARE, abs=1e-9), (label, share)
     for subtype, fraction in SN_II_SUBTYPE_FRACTION.items():
-        assert CLASS_FRACTION[subtype] == pytest.approx(0.2 * fraction, abs=1e-9)
+        assert CLASS_FRACTION[subtype] == pytest.approx(UNIFORM_CLASS_SHARE * fraction, abs=1e-9)
 
 
 def test_every_generated_class_is_fully_specified():
@@ -261,7 +265,7 @@ def test_izc_windows_carry_a_resolvable_label():
     population = draw_population(30, np.full(30, 0.06), random_generator)
     windows, _ = build_izc_windows(population, "deep")
     assert "UNKNOWN" not in set(windows["label"])
-    assert set(windows["label"]) <= {"SN Ia", "SN Iax", "SN Ib", "SN Ic", "SN II"}
+    assert set(windows["label"]) <= {"SN Ia", "SN Iax", "SN Ib", "SN Ic", "SN II", "TDE"}
     assert set(windows["izc_subtype"]) <= set(CLASS_FRACTION)
 
 
@@ -292,3 +296,41 @@ def test_type_ia_use_salt3_nir_wherever_it_covers_f184():
     assert sources[0.049] in SOURCES_BY_LABEL["SN Ia"]
     assert sources[0.05] == PREFERRED_IA_SOURCE
     assert sources[0.2] == PREFERRED_IA_SOURCE
+
+
+def test_tde_templates_are_a_population_not_a_prior():
+    """MOSFiT's priors are fitting priors: drawn blind they put the peak photosphere between 5e2
+    and 1e6 K and the peak luminosity between 1e38 and 1e45 erg/s, most of which is not a TDE. The
+    bank is cut to what is observed, and this pins that the cut survived the last rebuild."""
+    from astropy import constants
+
+    phase, temperature, radius = _tde_templates()
+    peak = int(np.argmin(np.abs(phase)))
+    assert len(temperature) > 100, len(temperature)
+    assert 1.4e4 < temperature[:, peak].min() and temperature[:, peak].max() < 5.1e4
+    luminosity = 4.0 * np.pi * radius[:, peak] ** 2 * constants.sigma_sb.cgs.value * temperature[:, peak] ** 4
+    assert 9e42 < luminosity.min() and luminosity.max() < 1.1e45
+    # A TDE photosphere is close to isothermal, which is what the observations show. Measured over
+    # the phases where the model has a photosphere at all: four templates of the bank touch T = 0 at
+    # a single phase, which MODEL_FLUX_FLOOR_MAGNITUDE and `_longest_run` drop before it is used.
+    warm = np.where(temperature > 0.0, temperature, np.nan)
+    assert np.nanmedian(np.nanmax(warm, axis=1) / np.nanmin(warm, axis=1)) < 2.0
+
+
+def test_tde_brightness_comes_from_the_model_not_from_a_drawn_magnitude():
+    """The bank carries its own luminosity, so `draw_population` must hand `roman_light_curve` the
+    magnitude of the template it picked rather than a number from a luminosity function."""
+    pytest.importorskip("sncosmo")
+    random_generator = np.random.default_rng(3)
+    magnitudes = tde_peak_absolute_magnitudes()
+    assert len(magnitudes) == tde_template_count()
+    assert -23.0 < magnitudes.min() and magnitudes.max() < -15.0
+    for _ in range(40):
+        population = draw_population(1, np.array([0.1]), random_generator)
+        if population[0]["label"] != "TDE":
+            continue
+        index = population[0]["tde_template_index"]
+        assert population[0]["peak_absolute_magnitude"] == pytest.approx(magnitudes[index])
+        break
+    else:
+        pytest.fail("no se sorteo ningun TDE en 40 intentos")
