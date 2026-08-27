@@ -5,6 +5,7 @@
 \usepackage[spanish,es-noshorthands]{babel}
 \decimalpoint
 \usepackage{amsmath,amssymb}
+\usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{multirow}
@@ -806,7 +807,7 @@ Regla única, idéntica para KN y contaminantes (\code{epochs\_from\_first\_dete
         visita sin detección igual cuenta como época. ``Hasta'': si el modelo se acaba antes salen
         menos, y de hecho $\sim$0.7\,\% de los contaminantes tienen 1--3 épocas. Las KN casi siempre
         tienen las 4, porque su grilla son 8 visitas.
-  \item Eje temporal: \code{days\_since\_detection} $= t_{\rm epoch} - t_{\rm 1ª\,detección}$. El
+  \item Eje temporal: \code{days\_since\_detection} $= t_{\rm epoch} - t_{\text{1ª detección}}$. El
         MJD absoluto nunca se usa.
 \end{enumerate}
 
@@ -907,6 +908,17 @@ dominio con los datos reales de Roman.
 
 \section{El transformer}
 
+\begin{figure}[htbp]
+\centering
+\includegraphics[height=0.86\textheight]{../training/plots/architecture_diagram.pdf}
+\caption{Paso \emph{forward} de \code{KilonovaTransformer} (\code{training/model.py}), generado por
+\code{training/plot\_architecture\_diagram.py}. El bloque encoder es \textbf{pre-norm}
+(sección \ref{sec:encoder}); el encoding temporal se dibuja como una rampa recta y no como una
+sinusoide porque \code{TIME2VEC\_FREQUENCIES}$=0$, así que solo sobrevive el término lineal en
+$\Delta t$.}
+\label{fig:arquitectura}
+\end{figure}
+
 Fichero \code{training/model.py}: encoder-only tipo \emph{set transformer}. Los tokens son un
 \textbf{conjunto indexado por (tiempo, banda)}, no una secuencia ordenada: el tiempo entra como
 \emph{feature continua dentro del token}, nunca como positional encoding.
@@ -915,14 +927,29 @@ Fichero \code{training/model.py}: encoder-only tipo \emph{set transformer}. Los 
 \begin{equation}
 \tau = \frac{\Delta t}{\Delta t_{\rm scale}},\quad \Delta t_{\rm scale}=5\ \text{d};\qquad
 \mathrm{t2v}(\Delta t) = W\bigl[\underbrace{w_0\tau + b_0}_{\text{lineal}},\;
-\underbrace{\sin(w_i \tau + b_i)}_{i=1\dots K}\bigr] \in \mathbb{R}^{d_{\rm model}}
+\underbrace{\sin(w_i \tau + b_i)}_{i=1\dots K}\bigr] + b_W \;\in \mathbb{R}^{d_{\rm model}}
 \end{equation}
-El \textbf{término lineal es el caballo de batalla}: es lo que permite a la atención restar tiempos
-de dos tokens y obtener una \emph{tasa de decaimiento} $\Delta m/\Delta t$, que es la física
-discriminante (KN: días; SN: semanas). En el modelo actual $K = 0$
-(\code{TIME2VEC\_FREQUENCIES}$=0$): con 3 épocas sobre $\sim$15 d no hay periodicidad resoluble ni
-física, y los transientes no son pulsadores. Los pesos $w_i$ se inicializan en
-\code{linspace(0.5, 3.0)} (periodos $\sim$10--60 d) si se activan.
+($W$ y $b_W$ son la \code{nn.Linear} final; el bias existe y hay que contarlo.) El \textbf{término
+lineal es el caballo de batalla}: es lo que da a la atención un eje temporal \emph{continuo} del que
+después se extrae la \emph{tasa de decaimiento} $\Delta m/\Delta t$, que es la física discriminante
+(KN: días; SN: semanas). El mecanismo exacto --- que \textbf{no} es una resta dentro del softmax ---
+está en la sección \ref{sec:atencion}.
+
+En el modelo actual $K = 0$ (\code{TIME2VEC\_FREQUENCIES}$=0$): con 3 épocas sobre $\sim$15 d no hay
+periodicidad resoluble ni física, y los transientes no son pulsadores. Los pesos $w_i$ se
+inicializan en \code{linspace(0.5, 3.0)} (periodos $\sim$10--60 d) si se activan.
+
+\paragraph{Consecuencia de $K=0$, que hay que saber decir.} Sin sinusoides el encoding temporal
+colapsa a un \textbf{mapa afín de rango 1}:
+\begin{equation}
+\mathrm{t2v}(\Delta t) = \mathbf{u}\,(w_0\tau + b_0) + b_W,
+\qquad \mathbf{u}\in\mathbb{R}^{192}\ \text{fijo: la única columna de } W
+\label{eq:t2v-rank1}
+\end{equation}
+Es decir: \textbf{el tiempo ocupa una sola dirección} del espacio de 192 dimensiones y su coordenada
+a lo largo de ella es lineal en $\Delta t$. No es un código rico, es una regla numerada --- y es
+exactamente lo que hace falta para que el logit de atención salga bilineal en los dos tiempos
+(Ec.\ \eqref{eq:logit-bilineal}).
 
 \subsection{Fusión del token}
 \begin{equation}
@@ -933,20 +960,210 @@ El tiempo se \textbf{suma}, el resto se concatena y se proyecta. Dimensiones de 
 $d_{\rm band}=6$, $d_{\rm type}=3$ --- una tabla de $N$ filas seguida de una capa lineal tiene rango
 efectivo $\le\min(N,D)$, así que $D=N$ es la elección más pequeña sin pérdida.
 
-Secuencia de entrada: $[\,\code{CLS},\ \code{Z},\ x_1,\dots,x_N\,]$ más una máscara de padding.
+Secuencia de entrada: $[\,\code{CLS},\ \code{Z},\ x_1,\dots,x_N\,]$, sobre la que se aplica un
+\code{input\_dropout} \emph{global} --- también a \code{CLS} y \code{Z}, no solo a los tokens de
+medición --- más una máscara de padding. Formas reales para un batch de 512:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+tensor & forma & origen \\
+\midrule
+\code{token\_vectors} & $(512,\ \le15,\ 192)$ & \code{TokenEmbedding} \\
+\code{cls\_token}, \code{redshift\_token} & $(512, 1, 192)$ c/u & \code{GlobalTokens} \\
+\code{sequence} & $(512,\ \le17,\ 192)$ & \code{cat} $+$ \code{input\_dropout} \\
+\code{attention\_mask} & $(512, 1, 1, \le17)$ & \code{\textasciitilde{}padding\_mask} $+$ dos \code{True} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{La máscara es de \emph{keys}, no de queries.} Su forma hace broadcast sobre las filas,
+\[
+(B,1,1,L) \;\longrightarrow\; (B,\ h,\ L_{\rm query},\ L_{\rm key}),
+\]
+o sea que enmascara \textbf{columnas}. Una posición de padding sigue
+produciendo un vector de salida (basura), pero nadie lo lee --- solo se usa \code{encoded[:,0]}. Y
+como \code{CLS} y \code{Z} son siempre keys válidas, \textbf{ninguna fila del softmax queda entera
+enmascarada}, que es la situación que daría NaN; el $-9\times10^{15}$ en vez de $-\infty$ es el
+segundo cinturón de seguridad.
+
+\paragraph{No hay positional encoding, y la máscara no distingue posiciones.} Por tanto el encoder es
+\emph{equivariante a permutaciones} de los tokens y la salida de \code{CLS} es \emph{invariante}. Eso
+es lo que hace literal la etiqueta ``set transformer'': barajar las filas del parquet no cambia el
+logit, y es comprobable en tres líneas.
+
+\subsection{Atención, paso a paso}
+\label{sec:atencion}
+
+Es el mecanismo central y conviene recorrerlo sin saltarse ningún paso. Todas las formas de abajo
+son las del modelo entrenado: $d_{\rm model}=192$, $h=6$ cabezas,
+$d_{\rm head} = 192/6 = \mathbf{32}$, $L\le17$ posiciones.
+
+\paragraph{Paso 1 --- qué son \emph{query}, \emph{key} y \emph{value}.} Cada posición emite
+\textbf{tres} vectores distintos derivados del mismo $x$. La analogía correcta es una búsqueda en un
+diccionario blando:
+
+\begin{center}
+\begin{tabularx}{\linewidth}{llX}
+\toprule
+vector & rol & pregunta que responde \\
+\midrule
+\emph{query} $q_i$ & lo que la posición $i$ \textbf{busca} & ¿qué información me falta? \\
+\emph{key} $k_j$ & el \textbf{índice} con que $j$ se anuncia & ¿de qué trato yo? \\
+\emph{value} $v_j$ & el \textbf{contenido} que $j$ entrega & ¿qué me llevo si la atiendo? \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+La compatibilidad entre $i$ y $j$ es el producto punto $q_i\cdot k_j$; el softmax sobre $j$ lo
+convierte en pesos y la salida de $i$ es la mezcla de los $v_j$.
+
+\textbf{Por qué key y value son vectores distintos} --- el punto que casi siempre se explica mal:
+el \emph{criterio de selección} y el \emph{contenido transportado} son independientes y se aprenden
+por separado. Aquí un token puede anunciarse por su key como ``soy banda H a $\Delta t = +5$ d''
+(criterio temporal y de banda) mientras su value transporta ``magnitud normalizada $-0.8$, $\sigma_m$
+pequeño'' (contenido fotométrico). Si key y value fueran el mismo vector no se podría a la vez
+\emph{seleccionar por tiempo} y \emph{leer magnitud}.
+
+El \code{[CLS]} es el caso límite: \textbf{no tiene contenido propio} --- es un \code{nn.Parameter}
+aprendido, idéntico para todos los objetos --- así que su único trabajo es emitir una query. Lo que
+esa query aprendió a pedir es la evidencia discriminante; lo que se lleva es la suma ponderada de los
+values de las mediciones. Por eso al final solo se lee la posición 0.
+
+\paragraph{Paso 2 --- de dónde salen: la proyección fusionada.} El código no usa tres matrices
+$W_Q,W_K,W_V$ de $192\times192$ sino \textbf{una sola} de $192\times576$, y la corta después:
+
+\begin{center}
+\begin{minipage}{0.94\linewidth}
+\small
+\begin{verbatim}
+qkv = self.qkv_projection(x)                        # (B, L, 576)
+qkv = qkv.reshape(B, L, num_heads, 3 * head_dim)    # (B, L, 6, 96)
+qkv = qkv.permute(0, 2, 1, 3)                       # (B, 6, L, 96)
+query, key, value = qkv.chunk(3, dim=-1)            # 3 x (B, 6, L, 32)
+\end{verbatim}
+\end{minipage}
+\end{center}
+
+\noindent El layout de las 576 filas es
+\code{[h0\_q(32) h0\_k(32) h0\_v(32) | h1\_q(32) \dots]}: primero por \emph{cabeza}, después en
+q/k/v. Es matemáticamente idéntico a las tres matrices separadas --- una permutación de columnas de
+una única matriz aprendida --- y ahorra dos GEMM.
+
+\begin{examen}
+\textbf{Trampa de portabilidad.} \code{nn.MultiheadAttention} de PyTorch usa el orden \emph{contrario}
+en su \code{in\_proj\_weight}: \code{[todos\_q(192); todos\_k(192); todos\_v(192)]}. Cambiar a la
+implementación nativa (o a \code{F.scaled\_dot\_product\_attention}) sin permutar las filas carga los
+pesos en silencio y devuelve basura. El \code{assert d\_model \% num\_heads == 0} es lo que garantiza
+que la partición en cabezas sea exacta.
+\end{examen}
+
+\paragraph{Paso 3 --- el producto punto escalado.} Con $\mathrm{LN}$ la \code{LayerNorm} de la rama
+(pre-norm, sección siguiente):
+\begin{align}
+\bigl[\,q^{(h)}_i \,\|\, k^{(h)}_i \,\|\, v^{(h)}_i\,\bigr]_{h=1}^{6}
+  &= W_{qkv}\,\mathrm{LN}(x_i) + b_{qkv}, \qquad W_{qkv}\in\mathbb{R}^{576\times192} \\
+\ell^{(h)}_{ij} &= \frac{q^{(h)}_i\cdot k^{(h)}_j}{\sqrt{d_{\rm head}}},
+  \qquad \ell^{(h)}_{ij} \leftarrow -9\times10^{15}\ \text{si } j \text{ es padding} \\
+\alpha^{(h)}_{ij} &= \operatorname*{softmax}_{j}\bigl(\ell^{(h)}_{ij}\bigr),
+  \qquad \sum_j \alpha^{(h)}_{ij} = 1
+\end{align}
+
+\textbf{Por qué se divide por $\sqrt{d_{\rm head}}$.} $q\cdot k$ es una suma de 32 productos; si las
+componentes son $\sim\mathcal{N}(0,1)$ independientes, esa suma tiene varianza 32 y desviación
+$\approx5.7$. Con 17 keys, logits de esa escala dejan el softmax prácticamente \emph{one-hot} ya en
+la inicialización: el gradiente se anula en 16 de las 17 entradas y la capa no aprende a mezclar.
+Dividir por $\sqrt{32}$ devuelve varianza 1 y mantiene el softmax en su régimen útil. Es
+normalización de varianza, no una constante de conveniencia.
+
+\textbf{Cómo se lee la matriz $17\times17$.} La fila $i$ es ``a quién mira $i$'' y suma 1; la columna
+$j$ es ``quién mira a $j$'' y \textbf{no} suma 1. Al plotear los mapas de
+\code{get\_attention\_maps}: la fila 0 es la de \code{[CLS]}, que es la interesante, y las filas de
+posiciones \emph{padded} son ruido --- el método no las recorta.
+
+\paragraph{Paso 4 --- multi-head: por qué 6 y no 1.} Un solo softmax por posición sólo puede expresar
+\textbf{un} patrón de enrutamiento: si \code{[CLS]} quisiera a la vez ``el token más tardío de F184''
+y ``el más temprano de Z087'', una cabeza sola tendría que promediarlos y perdería los dos. Seis
+cabezas son seis matrices de atención independientes sobre seis subespacios de 32 dimensiones,
+calculadas en paralelo y luego \textbf{concatenadas}:
+\begin{equation}
+\mathrm{MHA}(x)_i = W_O\Bigl[\;\textstyle\sum_j \alpha^{(1)}_{ij} v^{(1)}_j
+ \;\Big\|\;\cdots\;\Big\|\; \sum_j \alpha^{(6)}_{ij} v^{(6)}_j\;\Bigr]
+\end{equation}
+El $W_O$ (\code{output\_projection}, $192\times192$) \textbf{no es decorativo}: hasta el
+\code{reshape} las cabezas viven en bloques disjuntos de coordenadas y no se han hablado nunca. Es la
+única capa que combina lo que trajo la cabeza 0 con lo que trajo la cabeza 4.
+
+El trade-off es exacto porque $h\cdot d_{\rm head} = d_{\rm model}$ es constante: más cabezas $=$ más
+patrones de enrutamiento simultáneos, pero cada uno con menos resolución para comparar. Con $\le17$
+posiciones, 6 cabezas de 32 van holgadas.
+
+\paragraph{Paso 5 --- de aquí sale un $\Delta m/\Delta t$.} Es el argumento de diseño completo y tiene
+tres eslabones:
+\begin{enumerate}[nosep]
+  \item \textbf{En los logits, selección por diferencia temporal.} Como $x_i$ contiene
+        $\tau_i\mathbf{u}$ de forma aditiva (Ec.\ \eqref{eq:t2v-rank1}) y $Q,K$ son mapas lineales de
+        $\mathrm{LN}(x)$, el logit contiene un término \textbf{bilineal} en los dos tiempos:
+        \begin{equation}
+        \ell_{ij} \;\supset\; a\,\tau_i\tau_j + b\,\tau_i + c\,\tau_j + (\text{contenido})
+        \label{eq:logit-bilineal}
+        \end{equation}
+        un polinomio de segundo grado en $(\tau_i,\tau_j)$, módulo la no linealidad de la
+        \code{LayerNorm}. Con eso una cabeza puede implementar ``atiende al token de la misma banda
+        unos 5 d más tarde''.
+  \item \textbf{En los values, transporte.} El value de $j$ lleva a la vez su magnitud $m_j$ y su
+        tiempo $\tau_j$, porque ambos entraron linealmente en $x_j$.
+  \item \textbf{En el residual, la aritmética.} Tras $x_i + \sum_j \alpha_{ij}v_j$ el vector contiene
+        $(m_i,\tau_i)$ propios y $(m_j,\tau_j)$ importados, en subespacios distintos de las 192
+        dimensiones. Una capa lineal forma $m_i - m_j$ y $\tau_i - \tau_j$; el GELU del FFN aproxima
+        el cociente.
+\end{enumerate}
+
+\begin{examen}
+\textbf{Corrección importante y muy preguntable: la atención \emph{no} resta.} Como
+$\alpha_{ij}\ge0$ y $\sum_j\alpha_{ij}=1$, la salida de la atención es una \textbf{combinación
+convexa} de los values: por sí sola no puede calcular ninguna diferencia. La formulación correcta es
+\[
+\textbf{atención} = \text{transporte}, \qquad \textbf{residual} + \textbf{FFN} = \text{aritmética}.
+\]
+Lo que hace $x + \mathrm{MHA}(\cdot)$ es dejar en un mismo vector la información propia del token y
+la importada del otro, en direcciones distintas; la resta la hace después una capa lineal.\\[2pt]
+\textbf{Y por qué esto exige tiempo continuo:} si $\Delta t$ entrara como \emph{positional encoding}
+por índice de visita, el eslabón 1 codificaría ``posición 2 vs.\ posición 3'' en lugar de ``5.0 d
+vs.\ 4.7 d'', y el eslabón 3 no tendría denominador que dividir.
+\end{examen}
 
 \subsection{Bloque encoder (pre-norm)}
+\label{sec:encoder}
 \begin{align}
 x &\leftarrow x + \mathrm{Dropout}\bigl(\mathrm{MHA}(\mathrm{LayerNorm}(x))\bigr) \\
 x &\leftarrow x + \mathrm{FFN}(\mathrm{LayerNorm}(x)), \qquad
 \mathrm{FFN}(u) = W_2\,\mathrm{Dropout}(\mathrm{GELU}(W_1 u))
 \end{align}
-con atención escalada estándar y bidireccional (sin máscara causal):
-\begin{equation}
-\mathrm{Attention}(Q,K,V) = \mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_{\rm head}}}\right)V
-\end{equation}
-Cabeza: \code{classification\_head(LayerNorm(encoded[:,0]))}, es decir solo la salida de
-\code{[CLS]} $\to$ logits de 2 clases.
+La atención es la de la sección \ref{sec:atencion}: escalada, \textbf{bidireccional} --- sin máscara
+causal, no hay futuro que ocultar porque la ventana entera se ve de una vez --- y con la máscara de
+padding sobre las keys.
+
+\paragraph{Qué compra el pre-norm.} La \code{LayerNorm} va \emph{dentro} de la rama, antes de la
+atención, y no después del residual. Así el camino residual $x\to x\to x$ queda \textbf{limpio de
+normalizaciones} de punta a punta y el gradiente llega intacto a la primera capa. Consecuencia
+práctica que conviene saber decir: \textbf{el warmup de 5 épocas es del scheduler, no un parche de
+estabilidad}; con post-norm y 6 capas sí haría falta por estabilidad numérica.
+
+\paragraph{Dónde está el dropout y dónde no.} Hay dropout (i) sobre la secuencia de entrada completa,
+(ii) sobre la salida de la atención antes del residual y (iii) dentro del FFN, entre el GELU y la
+segunda lineal. \textbf{No} hay dropout sobre los \emph{pesos} de atención ni sobre la salida del
+FFN, y \code{nn.TransformerEncoderLayer} de PyTorch sí lleva los dos: otra diferencia que muerde si
+algún día se sustituye el bloque.
+
+\paragraph{No hay LayerNorm final.} \code{TransformerEncoder.forward} apila las 6 capas y devuelve el
+stream residual \emph{sin normalizar} --- habitual en pre-norm, pero suele cerrarse con una norma
+final. Aquí ese papel lo hace \code{classification\_norm}, y \textbf{solo en la posición 0}:
+\begin{center}
+\code{classification\_head(LayerNorm(encoded[:,0]))} $\longrightarrow$ logits de 2 clases
+\end{center}
+Es correcto porque solo se lee \code{[CLS]}, pero cualquier lectura futura de otra posición (pooling
+sobre tokens, sondeo por banda) saldría sin normalizar.
 
 \subsection{Hiperparámetros entrenados}
 \begin{center}
@@ -956,6 +1173,7 @@ parámetro & \emph{default} de \code{model.py} & \textbf{entrenamiento actual} \
 \midrule
 \code{d\_model} & 64 & \textbf{192} \\
 \code{num\_heads} & 4 & \textbf{6} \\
+$d_{\rm head}$ (derivado, $=d_{\rm model}/h$) & 16 & \textbf{32} \\
 \code{num\_layers} & 2 & \textbf{6} \\
 \code{d\_feedforward} & 128 & \textbf{768} ($4\times d_{\rm model}$) \\
 \code{dropout} & 0.1 & 0.1 \\
@@ -965,6 +1183,34 @@ parámetros totales & --- & \textbf{2\,674\,225} \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\paragraph{En qué se gastan esos 2.67 M.} Recalculado desde el código, cuadra al dígito:
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+componente & parámetros \\
+\midrule
+\code{qkv\_projection} ($192\to576$) & 111\,168 \\
+\code{output\_projection} ($192\to192$) & 37\,056 \\
+\code{attention\_norm} $+$ \code{feedforward\_norm} & 768 \\
+FFN ($192\to768\to192$) & 295\,872 \\
+\midrule
+\textbf{por bloque} & \textbf{444\,864} \\
+$\times\,6$ capas & 2\,669\,184 \\
+\code{TokenEmbedding} (banda 36, tipo 9, proyección 2\,688, norm 384, Time2Vec 386) & 3\,503 \\
+\code{GlobalTokens} (\code{CLS} 192, \code{no\_redshift} 192, proyección de $z$ 384) & 768 \\
+\code{classification\_norm} $+$ \code{classification\_head} & 770 \\
+\midrule
+\textbf{total} & \textbf{2\,674\,225} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Dato con el que defender la arquitectura: \textbf{el 66\,\% de cada bloque es el FFN, no la
+atención}. Con $\le17$ posiciones la matriz de atención tiene 289 entradas por cabeza y es
+computacionalmente irrelevante; el modelo gasta su capacidad en \emph{transformar} tokens, no en
+enrutarlos.
 
 \subsection{Receta de entrenamiento}
 \begin{itemize}[nosep]
@@ -1159,7 +1405,31 @@ física.
 
 \item \textbf{¿Por qué Time2Vec con 0 frecuencias?}
       Tres épocas sobre $\sim$15 d no resuelven ninguna frecuencia, y los transientes no son
-      pulsadores. Solo el término lineal tiene contenido físico.
+      pulsadores. Solo el término lineal tiene contenido físico. Con $K=0$ el encoding es un mapa
+      afín de \emph{rango 1}: el tiempo ocupa una sola dirección de las 192.
+
+\item \textbf{¿Qué son \emph{query}, \emph{key} y \emph{value}, y por qué key $\ne$ value?}
+      Query $=$ lo que una posición busca, key $=$ el índice con que otra se anuncia, value $=$ lo
+      que entrega si la eligen. Key y value son distintos porque el \emph{criterio de selección} y el
+      \emph{contenido transportado} son independientes: un token se anuncia por (banda, $\Delta t$) y
+      entrega ($m$, $\sigma_m$). El \code{[CLS]} no tiene contenido propio --- es un parámetro
+      aprendido --- y su único papel es emitir la query que recoge la evidencia.
+
+\item \textbf{¿La atención calcula el $\Delta m/\Delta t$?}
+      No por sí sola: sus pesos son positivos y suman 1, así que solo produce combinaciones
+      \emph{convexas} de los values --- transporta, no resta. La resta la permite el residual, que
+      deja el valor propio y el importado en el mismo vector, y la hace la capa lineal siguiente.
+
+\item \textbf{¿Por qué se divide por $\sqrt{d_{\rm head}}$ y no por $d_{\rm head}$?}
+      Porque $q\cdot k$ es una suma de $d_{\rm head}=32$ productos y su desviación crece como
+      $\sqrt{32}$. Sin el factor, el softmax nace saturado (\emph{one-hot}) y no hay gradiente para
+      aprender a mezclar. Es normalización de varianza.
+
+\item \textbf{¿Qué enmascara exactamente \code{attention\_mask}?}
+      Solo las \emph{keys} (columnas): su forma $(B,1,1,L)$ hace broadcast sobre las filas. Las
+      posiciones de padding siguen generando salida, pero nadie la lee. Como \code{CLS} y \code{Z}
+      son siempre válidas, ninguna fila queda entera enmascarada y el $-9\times10^{15}$ nunca produce
+      NaN.
 
 \item \textbf{¿Por qué se selecciona por \code{val\_acc\_noz}?}
       Ver el recuadro de la sección del transformer: KN y contaminantes son casi disjuntos en $z$,
