@@ -21,6 +21,8 @@ from kilonova.simulation.intermediate_z_contaminants import (
     GENTYPE_BY_LABEL,
     IZC_GENTYPE_OFFSET,
     MODEL_FLUX_FLOOR_MAGNITUDE,
+    PREFERRED_IA_MINIMUM_REDSHIFT,
+    PREFERRED_IA_SOURCE,
     SN_II_SUBTYPE_FRACTION,
     SOURCES_BY_LABEL,
     build_izc_windows,
@@ -261,3 +263,32 @@ def test_izc_windows_carry_a_resolvable_label():
     assert "UNKNOWN" not in set(windows["label"])
     assert set(windows["label"]) <= {"SN Ia", "SN Iax", "SN Ib", "SN Ic", "SN II"}
     assert set(windows["izc_subtype"]) <= set(CLASS_FRACTION)
+
+
+def test_type_ia_use_salt3_nir_wherever_it_covers_f184():
+    """`salt3-nir` is OpenUniverse's own SN Ia model and halves a colour offset, but reaches only
+    20000 A rest-frame. The switch has to happen exactly where F184 stops fitting inside it, and
+    every SN Ia below that redshift still has to be generated -- a missing class in the brightest
+    bin would be a worse artefact than the model change."""
+    sncosmo = pytest.importorskip("sncosmo")
+    from kilonova.photometry.roman_noise import roman_bandpasses
+
+    register_sources()
+    red_edge = roman_bandpasses()["F184"].red_limit * 10
+    preferred = sncosmo.get_source(PREFERRED_IA_SOURCE)
+    assert red_edge / preferred.maxwave() - 1.0 == pytest.approx(PREFERRED_IA_MINIMUM_REDSHIFT, abs=1e-6)
+    for fallback in SOURCES_BY_LABEL["SN Ia"]:
+        assert sncosmo.get_source(fallback).maxwave() >= red_edge
+
+    random_generator = np.random.default_rng(5)
+    redshifts = np.array([0.02, 0.049, 0.05, 0.2])
+    sources = {}
+    for redshift in redshifts:
+        population = draw_population(1, np.array([redshift]), random_generator)
+        while population[0]["label"] != "SN Ia":
+            population = draw_population(1, np.array([redshift]), random_generator)
+        sources[redshift] = population[0]["source_name"]
+    assert sources[0.02] in SOURCES_BY_LABEL["SN Ia"]
+    assert sources[0.049] in SOURCES_BY_LABEL["SN Ia"]
+    assert sources[0.05] == PREFERRED_IA_SOURCE
+    assert sources[0.2] == PREFERRED_IA_SOURCE

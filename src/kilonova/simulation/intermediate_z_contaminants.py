@@ -150,6 +150,7 @@ SOURCES_BY_LABEL = {
         "snana-sdss004012",
         "snana-sdss014475",
     ],
+    # salt2-extended is the fallback, not the first choice; see PREFERRED_IA_SOURCE.
     "SN Ia": ["salt2-extended"],
     # Not a registry name until `_sncosmo()` registers it; see IAX_SOURCE_NAME.
     "SN Iax": [IAX_SOURCE_NAME],
@@ -218,6 +219,27 @@ PEAK_ABSOLUTE_MAGNITUDE = {
 # rest-frame V on the Vega system; converting it would mean assuming a colour the model already
 # carries, so the drawn magnitude is applied in the band it was measured in.
 PEAK_ABSOLUTE_MAGNITUDE_BAND = {"SN Iax": ("bessellv", "vega")}
+
+# SN Ia get whichever SALT covers F184 at their redshift, which is not always the same one.
+#
+# OpenUniverse's SN Ia model is SALT3 extended into the near-infrared -- Pierel et al. (2022), which
+# sncosmo ships as `salt3-nir`. Using it matters: against the 68 SN Ia OpenUniverse has below
+# z = 0.1, the median Z087-Y106 of a matched sample sits 0.180 mag blue of them with
+# `salt2-extended` and 0.080 mag blue with `salt3-nir`, so the switch removes more than half of a
+# systematic colour offset in the largest single class of the sample.
+#
+# It cannot be used everywhere. `salt3-nir` stops at 20000 A rest-frame and the red edge of F184 is
+# at 21000 A, so it covers the band only above z = 0.05 exactly; `salt2-extended` reaches 24990 A
+# and covers it at every redshift this module generates. Below z = 0.05, therefore, the fallback.
+#
+# The alternative was to let `salt3-nir` reject those objects, and that is worse than the model
+# discontinuity it avoids: roughly a third of the deep sample's deficit sits below z = 0.05, so the
+# result would be a redshift range with every contaminant class present except SN Ia -- a
+# class-correlated hole in the brightest bin of the sample, which is the exact species of artefact
+# this module exists to remove. Extending `salt3-nir` by the missing 1000 A was the other option and
+# is extrapolation, which the coverage test exists to forbid.
+PREFERRED_IA_SOURCE = "salt3-nir"
+PREFERRED_IA_MINIMUM_REDSHIFT = 0.05
 
 # SALT2 shape and colour, from the OpenUniverse SN Ia population (salt2_x1, salt2_c).
 SALT2_X1 = (0.152, 0.914)
@@ -392,6 +414,8 @@ def draw_population(number, redshifts, random_generator):
         if label == "SN Ia":
             realization["salt2_x1"] = float(random_generator.normal(*SALT2_X1))
             realization["salt2_c"] = float(random_generator.normal(*SALT2_C))
+            if redshift >= PREFERRED_IA_MINIMUM_REDSHIFT:
+                realization["source_name"] = PREFERRED_IA_SOURCE
         if label == "SN Iax":
             rise_time, decline_b, decline_r = iax_shape_parameters(peak_absolute_magnitude, random_generator)
             realization["iax_rise_time"] = rise_time
