@@ -18,6 +18,7 @@ import pandas as pd
 import torch
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Patch
+from model import BAND_ORDER, TOKEN_TYPE_ORDER
 from openuniverse_data import (
     GROUP_KEY_VERSION,
     GROUP_ORDER,
@@ -48,6 +49,12 @@ CHECKPOINT = "checkpoints/kilonova_transformer-soup.ckpt"
 PLOTS_DIR = "plots"
 os.makedirs(PLOTS_DIR, exist_ok=True)
 C_CONTAMINANT = "#8338EC"
+# same d/u/n palette as attention_visualization.ipynb, so the two attention figures read as one family
+C_DETECTION = "#FB5607"
+C_UPPER_LIMIT = "#3A86FF"
+C_NOT_OBSERVED = "#8D99AE"
+TOKEN_TYPE_COLOR = {"d": C_DETECTION, "u": C_UPPER_LIMIT, "n": C_NOT_OBSERVED}
+TOKEN_TYPE_NAME = {"d": "detection", "u": "upper limit", "n": "not observed"}
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", device)
@@ -378,5 +385,124 @@ with PdfPages(contaminant_pdf) as pdf_pages:
     pdf_pages.savefig(fig, bbox_inches="tight")
     plt.close(fig)
 print("saved", contaminant_pdf)
+
+# ------------------------------------------------- CLS attention feature importance (band x type)
+# Same no-redshift loaders as the regime above (`regime_loaders`); this is the population-level
+# version of attention_visualization.ipynb's plot_cls_attention_on_lightcurve, which only ever
+# looked at one example at a time.
+NUM_BANDS = len(BAND_ORDER)
+NUM_TOKEN_TYPES = len(TOKEN_TYPE_ORDER)
+
+
+def attention_by_band_and_type(loader):
+    """Mean last-layer CLS attention weight (averaged over heads) received by each (band,
+    token_type) cell, over every real (non-padding) token in the loader. Returns
+    (mean_attention, token_count), both shaped (NUM_BANDS, NUM_TOKEN_TYPES)."""
+    weight_sum = torch.zeros(NUM_BANDS * NUM_TOKEN_TYPES)
+    token_count = torch.zeros(NUM_BANDS * NUM_TOKEN_TYPES)
+    with torch.no_grad():
+        for batch in loader:
+            model_input = {key: value.to(device) for key, value in batch.items() if key in MODEL_INPUT_KEYS}
+            attention_maps = model.model.attention_maps(model_input)
+            cls_attention = attention_maps[-1][:, :, 0, :].mean(dim=1)  # (batch, seq), heads-averaged
+            token_attention = cls_attention[:, 2:].cpu()  # drop CLS + [Z]/[noZ], align with token positions
+            valid = (~batch["padding_mask"]).reshape(-1)
+            cell_index = (batch["band_index"] * NUM_TOKEN_TYPES + batch["token_type_index"]).reshape(-1)
+            weight_sum.index_add_(0, cell_index[valid], token_attention.reshape(-1)[valid])
+            token_count.index_add_(0, cell_index[valid], torch.ones(int(valid.sum())))
+    mean_attention = (weight_sum / token_count.clamp(min=1)).reshape(NUM_BANDS, NUM_TOKEN_TYPES)
+    return mean_attention.numpy(), token_count.reshape(NUM_BANDS, NUM_TOKEN_TYPES).numpy()
+
+
+feature_importance = {}
+for epochs in EPOCHS:
+    mean_attention, token_count = attention_by_band_and_type(regime_loaders[epochs])
+    feature_importance[epochs] = (mean_attention, token_count)
+    print(f"{epochs}ep (no redshift) attention totals per band:", mean_attention.sum(axis=1).round(3))
+
+
+def draw_feature_importance_panel(ax, mean_attention, label_fontsize):
+    """One cluster of d/u/n bars per band; height = mean last-layer CLS attention weight on that
+    (band, token_type), over the full no-redshift test population."""
+    band_positions = np.arange(NUM_BANDS)
+    bar_width = 0.8 / NUM_TOKEN_TYPES
+    for type_position, token_type in enumerate(TOKEN_TYPE_ORDER):
+        offset = (type_position - (NUM_TOKEN_TYPES - 1) / 2) * bar_width
+        heights = mean_attention[:, type_position]
+        positions = band_positions + offset
+        ax.bar(
+            positions,
+            heights,
+            width=bar_width,
+            color=TOKEN_TYPE_COLOR[token_type],
+            edgecolor="black",
+            linewidth=0.4,
+        )
+        for position, height in zip(positions, heights, strict=False):
+            if height > 0:
+                ax.text(
+                    position,
+                    height,
+                    f"{height:.3f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=label_fontsize - 3,
+                    rotation=90,
+                )
+    ax.set_xticks(band_positions, BAND_ORDER, fontsize=label_fontsize)
+    ax.grid(alpha=0.3, axis="y")
+
+
+def feature_importance_legend_handles():
+    return [
+        Patch(
+            facecolor=TOKEN_TYPE_COLOR[token_type],
+            edgecolor="black",
+            linewidth=0.4,
+            label=TOKEN_TYPE_NAME[token_type],
+        )
+        for token_type in TOKEN_TYPE_ORDER
+    ]
+
+
+# Headroom above the tallest bar (F-band detection, the max in every regime) so its rotated value
+# label never collides with the legend box.
+GLOBAL_MAX_ATTENTION = max(mean_attention.max() for mean_attention, _ in feature_importance.values())
+
+feature_importance_pdf = os.path.join(PLOTS_DIR, "07_attention_feature_importance_no_redshift_test_only.pdf")
+with PdfPages(feature_importance_pdf) as pdf_pages:
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.5), sharey=True)
+    for ax, epochs in zip(axes, EPOCHS, strict=False):
+        mean_attention, _ = feature_importance[epochs]
+        draw_feature_importance_panel(ax, mean_attention, 10)
+        ax.set_title(f"{epochs} epoch{'s' if epochs > 1 else ''}", fontsize=14)
+    axes[0].set_ylim(0, GLOBAL_MAX_ATTENTION * 1.2)
+    axes[0].set_ylabel("mean CLS attention weight (last layer)", fontsize=13)
+    axes[1].set_xlabel("Roman band", fontsize=13)
+    axes[0].legend(handles=feature_importance_legend_handles(), fontsize=11, loc="upper left")
+    fig.suptitle("What the classifier attends to, by band and token type (no redshift)", fontsize=16)
+    plt.tight_layout()
+    pdf_pages.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+    # Second page: the 2-epoch panel on its own, large -- same convention as the contaminant PDF.
+    PRESENTATION_EPOCHS = 2
+    fig, ax = plt.subplots(figsize=(12, 7))
+    mean_attention, _ = feature_importance[PRESENTATION_EPOCHS]
+    draw_feature_importance_panel(ax, mean_attention, 13)
+    ax.set_ylim(0, mean_attention.max() * 1.2)
+    ax.set_ylabel("mean CLS attention weight (last layer)", fontsize=17)
+    ax.set_xlabel("Roman band", fontsize=17)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.legend(handles=feature_importance_legend_handles(), fontsize=15, loc="upper left")
+    ax.set_title(
+        f"What the classifier attends to, by band and token type\n"
+        f"({PRESENTATION_EPOCHS} epochs, no redshift)",
+        fontsize=19,
+    )
+    plt.tight_layout()
+    pdf_pages.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+print("saved", feature_importance_pdf)
 
 print("done")
