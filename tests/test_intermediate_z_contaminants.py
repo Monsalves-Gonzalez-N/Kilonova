@@ -334,3 +334,23 @@ def test_tde_brightness_comes_from_the_model_not_from_a_drawn_magnitude():
         break
     else:
         pytest.fail("no se sorteo ningun TDE en 40 intentos")
+
+
+def test_several_tiers_give_what_one_tier_at_a_time_gives():
+    """Asking for both tiers at once must be an optimisation, not a change of result.
+
+    The light curve is the same object in every Roman band and which of them a tier observes is
+    decided afterwards, so one call serves both; calling once per tier does the expensive half
+    twice, and the tiers overlap almost completely (717 863 of the 717 864 wide contaminants of
+    OpenUniverse are deep ones too)."""
+    pytest.importorskip("sncosmo")
+    random_generator = np.random.default_rng(17)
+    population = draw_population(25, random_generator.uniform(0.02, 0.4, 25), random_generator)
+    together = build_izc_windows(population, ["deep", "wide"])
+    for tier in ("deep", "wide"):
+        alone_windows, alone_rejected = build_izc_windows(population, tier)
+        shared_windows, shared_rejected = together[tier]
+        assert shared_rejected == alone_rejected, tier
+        assert len(shared_windows) == len(alone_windows), tier
+        if len(alone_windows):
+            assert np.allclose(shared_windows["mag_true"], alone_windows["mag_true"], equal_nan=True)

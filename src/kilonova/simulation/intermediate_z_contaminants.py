@@ -39,7 +39,7 @@ near-infrared, which for core-collapse supernovae is poorly observed and is extr
 library. The izc sample carries more model uncertainty in H158 and F184 than the OpenUniverse one.
 """
 
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -306,6 +306,18 @@ MODEL_FLUX_FLOOR_MAGNITUDE = 40.0
 FULL_WELL_ELECTRONS = 1.0e5
 
 
+@cache
+def _registry_source(source_name):
+    """One instance per registry name, kept for the life of the process.
+
+    `sncosmo.Model(source="snana-2006jl")` goes back to the registry on every call and the registry
+    re-reads and re-splines the template's ASCII file: profiling a mixed population put 79 % of the
+    generation time inside `read_griddata_ascii`, three million calls to its comment stripper. The
+    sources are read-only here -- every model sets its own parameters before use -- so one instance
+    each is enough."""
+    return _sncosmo().get_source(source_name)
+
+
 def _sncosmo():
     """sncosmo is only needed to generate, never to train or evaluate, so it stays a lazy import.
 
@@ -563,7 +575,7 @@ def roman_light_curve(realization, cosmology=None):
     elif realization["label"] == "TDE":
         source = tde_source(realization["tde_template_index"])
     else:
-        source = realization["source_name"]
+        source = _registry_source(realization["source_name"])
     model = sncosmo.Model(source=source)
     model.set(z=realization["redshift"], t0=0.0)
     if "salt2_x1" in realization:
@@ -630,51 +642,73 @@ def _longest_run(rows):
 def build_izc_windows(population, tier, cosmology=None):
     """Early windows for a drawn population, in the schema of `build_window_from_model`.
 
-    Objects whose spectrum does not cover every band of the tier are dropped, as are the ones the
-    survey never detects -- the same rule the OpenUniverse path applies, where an undetected
-    transient simply produces no window."""
-    constants = build_tier_constants(tier)
-    tier_bands = set(constants["bands"])
-    bright_limit = saturation_magnitude(tier)
-    windows, rejected = [], {"coverage": 0, "undetected": 0, "saturated_kept": 0}
+    `tier` may be one tier or several. Several is the cheap way to ask: the light curve
+    `roman_light_curve` returns is the same object seen in every Roman band, and which of them a
+    tier observes is decided afterwards, so one call serves both tiers and calling this once per
+    tier does the expensive half of the work twice. It matters because the tiers are not disjoint
+    populations -- 717 863 of the 717 864 wide contaminants of OpenUniverse are also deep ones.
+
+    Returns {tier: (windows, rejected)} when given several tiers, and the bare pair when given one.
+
+    Objects whose spectrum does not cover every band of a tier are dropped from that tier, as are
+    the ones the survey never detects -- the same rule the OpenUniverse path applies, where an
+    undetected transient simply produces no window."""
+    tiers = [tier] if isinstance(tier, str) else list(tier)
+    per_tier = {
+        one_tier: (
+            build_tier_constants(one_tier),
+            saturation_magnitude(one_tier),
+            [],
+            {"coverage": 0, "undetected": 0, "saturated_kept": 0},
+        )
+        for one_tier in tiers
+    }
     for realization in population:
         curves = roman_light_curve(realization, cosmology=cosmology)
-        if not tier_bands.issubset(curves):
-            rejected["coverage"] += 1
-            continue
-        model = {band: curves[band] for band in constants["bands"]}
-        object_id = (
-            f"izc_{realization['index']:08d}_{realization['label'].replace(' ', '')}"
-            f"_{realization['redshift']:.4f}"
-        )
-        window = build_window_from_model(
-            object_id,
-            model,
-            constants,
-            realization["redshift"],
-            GENTYPE_BY_LABEL[realization["label"]] + IZC_GENTYPE_OFFSET,
-            noise_seed=realization["index"],
-            visit_index_offset=realization["cadence_parity"],
-        )
-        if window is None:
-            rejected["undetected"] += 1
-            continue
-        window["tier"] = tier
-        # `build_window_from_model` reads the label off the gentype, and IZC_GENTYPE_OFFSET puts it
-        # outside GENTYPE_LABEL, so every izc window came out "UNKNOWN". The label is restored in
-        # OpenUniverse's own vocabulary -- the class this object stands in for -- and the finer
-        # subtype this module draws (IIP/IIL/IIn, which OpenUniverse pools into "SN II") is kept in
-        # its own column instead of being smuggled into `label`.
-        window["label"] = GENTYPE_LABEL[GENTYPE_BY_LABEL[realization["label"]]]
-        window["izc_subtype"] = realization["label"]
-        observed = window[window["observed"]]
-        saturated = observed["mag_true"] < observed["band"].map(bright_limit)
-        if saturated.any():
-            rejected["saturated_kept"] += 1
-        windows.append(window)
-    if not windows:
-        return pd.DataFrame(), rejected
-    return pd.concat(windows, ignore_index=True), rejected
+        for one_tier, (constants, bright_limit, windows, rejected) in per_tier.items():
+            _add_one_window(realization, curves, constants, bright_limit, windows, rejected, one_tier)
+    results = {
+        one_tier: ((pd.concat(windows, ignore_index=True) if windows else pd.DataFrame()), rejected)
+        for one_tier, (_, _, windows, rejected) in per_tier.items()
+    }
+    return results[tiers[0]] if isinstance(tier, str) else results
+
+
+def _add_one_window(realization, curves, constants, bright_limit, windows, rejected, tier):
+    """One tier's window for one already-computed light curve, appended in place."""
+    if not set(constants["bands"]).issubset(curves):
+        rejected["coverage"] += 1
+        return
+    model = {band: curves[band] for band in constants["bands"]}
+    object_id = (
+        f"izc_{realization['index']:08d}_{realization['label'].replace(' ', '')}"
+        f"_{realization['redshift']:.4f}"
+    )
+    window = build_window_from_model(
+        object_id,
+        model,
+        constants,
+        realization["redshift"],
+        GENTYPE_BY_LABEL[realization["label"]] + IZC_GENTYPE_OFFSET,
+        noise_seed=realization["index"],
+        visit_index_offset=realization["cadence_parity"],
+    )
+    if window is None:
+        rejected["undetected"] += 1
+        return
+    window["tier"] = tier
+    # `build_window_from_model` reads the label off the gentype, and IZC_GENTYPE_OFFSET puts it
+    # outside GENTYPE_LABEL, so every izc window came out "UNKNOWN". The label is restored in
+    # OpenUniverse's own vocabulary -- the class this object stands in for -- and the finer
+    # subtype this module draws (IIP/IIL/IIn, which OpenUniverse pools into "SN II") is kept in
+    # its own column instead of being smuggled into `label`.
+    window["label"] = GENTYPE_LABEL[GENTYPE_BY_LABEL[realization["label"]]]
+    window["izc_subtype"] = realization["label"]
+    observed = window[window["observed"]]
+    saturated = observed["mag_true"] < observed["band"].map(bright_limit)
+    if saturated.any():
+        rejected["saturated_kept"] += 1
+    windows.append(window)
 
 
 def saturation_magnitude(tier):
