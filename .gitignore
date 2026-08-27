@@ -77,6 +77,8 @@ docs/*.aux
 docs/*.log
 docs/*.out
 docs/*.toc
+docs/*.fdb_latexmk
+docs/*.fls
 
 # Tool caches
 .pytest_cache/
@@ -86,3 +88,12 @@ src/kilonova.egg-info/
 # CLAUDE.md y la memoria de Claude viven en Dropbox (~/Dropbox/Kilonova), compartidos entre
 # las dos maquinas. El symlink NO se versiona: su destino absoluto difiere entre Linux y el Mac.
 CLAUDE.md
+
+# ENGRAVE AT2017gfo release (44 MB zip + spectra, sid.erda.dk share df1fMhon6Z) y sus productos.
+data/at2017gfo/AT2017gfo.zip
+data/at2017gfo/AT2017gfo/
+data/at2017gfo/*.parquet
+data/at2017gfo/*.pdf
+
+# Cache de VizieR de la tabla 3 de Villar+2017: se vuelve a bajar sola si falta.
+data/at2017gfo/villar2017_table3.csv
