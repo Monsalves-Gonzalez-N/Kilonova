@@ -55,7 +55,12 @@ from kilonova.config import load_paths
 
 # Tabla 1 de Chase et al. 2021: magnitud limite 5sigma por banda Roman (Hounsell+18, Scolnic+18).
 CHASE_LIMITING_MAGNITUDE = {
-    "R062": 26.2, "Z087": 25.7, "Y106": 25.6, "J129": 25.5, "H158": 25.4, "F184": 24.9,
+    "R062": 26.2,
+    "Z087": 25.7,
+    "Y106": 25.6,
+    "J129": 25.5,
+    "H158": 25.4,
+    "F184": 24.9,
 }
 # Valores publicados a igualar (Roman/H, grilla completa). z05 corregido a 0.48: el 0.79 de
 # `docs/plan_kn_widefield_repro.md` no concuerda con la figura del propio paper, donde el contorno
@@ -362,9 +367,7 @@ def figure_paper_style(
 
     # Handles largos y finos: con el trazo grueso y el handle corto de antes los tres patrones de
     # guiones se veian como la misma barra gris y la leyenda no distinguia un nivel de otro.
-    handles = [
-        Line2D([], [], color="0.15", lw=1.8, ls=CONTOUR_DASHES[level]) for level in CONTOUR_LEVELS
-    ]
+    handles = [Line2D([], [], color="0.15", lw=1.8, ls=CONTOUR_DASHES[level]) for level in CONTOUR_LEVELS]
     axes.legend(
         handles,
         [f"{level:g}" for level in CONTOUR_LEVELS],
@@ -564,8 +567,10 @@ def main():
     summary.to_csv(figures_dir / "bordes_de_detectabilidad.csv", index=False)
     print("\nBordes de detectabilidad (z al que la fraccion cruza cada nivel):")
     print(summary.to_string(index=False, float_format=lambda value: f"{value:.3f}"))
-    print(f"\nChase+21 Roman/H (grilla completa): z95%={CHASE_ROMAN_H['z95']}, "
-          f"z50%={CHASE_ROMAN_H['z50']}, z05%={CHASE_ROMAN_H['z05']}")
+    print(
+        f"\nChase+21 Roman/H (grilla completa): z95%={CHASE_ROMAN_H['z95']}, "
+        f"z50%={CHASE_ROMAN_H['z50']}, z05%={CHASE_ROMAN_H['z05']}"
+    )
     print(f"\nFiguras en {figures_dir}")
 
 
