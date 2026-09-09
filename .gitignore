@@ -107,3 +107,17 @@ data/openuniverse/galaxy_band_cube_vs_redshift.gif
 
 # Cache de VizieR de la tabla 3 de Villar+2017: se vuelve a bajar sola si falta.
 data/at2017gfo/villar2017_table3.csv
+
+# Carnegie Supernova Project photometry — scripts/download_csp.py
+data/csp/
+
+# Catalogos snana de OpenUniverse (135 MB, 33 healpix): los baja
+# data/openuniverse/download_openuniverse_snana.sh y son entrada, no producto.
+data/openuniverse/snana_catalogs/
+
+# Archivo de plantillas de snsedextend: camino descartado el 9-sep-2026 (ver el docstring de
+# scripts/build_v19_extended_templates.py). El script se versiona, el artefacto de 14 MB no.
+data/v19/
+
+# snsedextend abre ./error.log en el directorio de trabajo al importarse.
+error.log
