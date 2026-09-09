@@ -207,6 +207,18 @@ def _read_contaminants_parquet(path, tier):  # tier unused: groups are deliberat
     return _read_long_parquet(path, lambda ids: np.asarray(ids, dtype=str))
 
 
+def _read_izc_parquet(path, tier):  # tier unused, for the same reason as the contaminants
+    """Low-redshift contaminants re-rendered from OpenUniverse objects (kn-izc-windows).
+
+    Group by the PARENT, not by the object: one OpenUniverse object is re-rendered many times, at
+    different redshifts, and all of those copies are the same transient seen at different distances
+    -- same template, same shape, same host screen, same measured brightness. The object_id is
+    `izc_{parent_key}_{z}_{index}` with `parent_key` = `snana_{healpix}_{id}`, so the group is the
+    first three fields, and it is deliberately the SAME STRING the OpenUniverse contaminants carry:
+    if the parent itself is in the training set, its re-renderings land on its side of the split."""
+    return _read_long_parquet(path, lambda ids: np.array(["_".join(i.split("_")[1:4]) for i in ids]))
+
+
 def _read_kn_parquet(path, tier):  # tier unused: KN groups are deliberately not namespaced
     """Kilonovas from kn_windows_{tier}.parquet.
 
@@ -219,15 +231,24 @@ def _read_kn_parquet(path, tier):  # tier unused: KN groups are deliberately not
 
 
 # ----------------------------------------------------------------------------- assembly + cache
-def _assemble(kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=True):
-    """Read all four sources into flat ragged arrays (CSR-style: one big array per field +
-    per-object offsets) plus per-object metadata."""
+def _assemble(
+    kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep=None, izc_wide=None, verbose=True
+):
+    """Read every source into flat ragged arrays (CSR-style: one big array per field +
+    per-object offsets) plus per-object metadata.
+
+    The izc sources are optional and are contaminants like any other: they carry the same window
+    schema and the same labels, and the only thing that makes them their own reader is what a group
+    is for the split."""
     sources = [
         ("KN", _read_kn_parquet, kn_deep, "deep"),
         ("KN", _read_kn_parquet, kn_wide, "wide"),
         ("contaminant", _read_contaminants_parquet, contaminant_deep, "deep"),
         ("contaminant", _read_contaminants_parquet, contaminant_wide, "wide"),
+        ("contaminant", _read_izc_parquet, izc_deep, "deep"),
+        ("contaminant", _read_izc_parquet, izc_wide, "wide"),
     ]
+    sources = [source for source in sources if source[2] is not None]
     bigs, counts_list = [], []
     orig_label, redshift, group_key, is_kn = [], [], [], []
     for kind, reader, path, tier in sources:
@@ -262,10 +283,33 @@ def _assemble(kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=True
     return big, meta
 
 
-def _load_or_build(cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=True):
+def _load_or_build(
+    cache_path,
+    kn_deep,
+    kn_wide,
+    contaminant_deep,
+    contaminant_wide,
+    izc_deep=None,
+    izc_wide=None,
+    verbose=True,
+):
+    source_names = np.array(
+        [
+            os.path.basename(path)
+            for path in (kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep, izc_wide)
+            if path is not None
+        ]
+    )
     if cache_path and os.path.exists(cache_path):
         cached = np.load(cache_path, allow_pickle=False)
         cached_version = int(cached["group_key_version"]) if "group_key_version" in cached else 1
+        cached_sources = cached["source_names"] if "source_names" in cached else None
+        if cached_sources is not None and not np.array_equal(cached_sources, source_names):
+            print(
+                f"cache {cache_path} was built from {list(cached_sources)} and this call asks for "
+                f"{list(source_names)} -- rebuilding"
+            )
+            cached_version = None
         if cached_version == GROUP_KEY_VERSION:
             if verbose:
                 print(f"loading cached tokens from {cache_path}")
@@ -284,9 +328,11 @@ def _load_or_build(cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_w
         )
     if verbose:
         print("assembling tokens from source files...")
-    big, meta = _assemble(kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose=verbose)
+    big, meta = _assemble(
+        kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep, izc_wide, verbose=verbose
+    )
     if cache_path:
-        np.savez(cache_path, **big, **meta, group_key_version=GROUP_KEY_VERSION)
+        np.savez(cache_path, **big, **meta, group_key_version=GROUP_KEY_VERSION, source_names=source_names)
         if verbose:
             print(f"cached tokens to {cache_path}")
     return big, meta
@@ -466,6 +512,8 @@ def build_dataloaders(
     kn_wide,
     contaminant_deep,
     contaminant_wide,
+    izc_deep=None,
+    izc_wide=None,
     batch_size=1024,
     fractions=(0.90, 0.05, 0.05),
     split_seed=42,
@@ -474,11 +522,18 @@ def build_dataloaders(
     cache_path=None,
     verbose=True,
 ):
-    """Read the four OpenUniverse sources, build the leakage-aware 90/5/5 split, fit magnitude
-    normalization on TRAIN detections, and return the dataloaders + metadata."""
+    """Read the OpenUniverse sources, build the leakage-aware 90/5/5 split, fit magnitude
+    normalization on TRAIN detections, and return the dataloaders + metadata.
+
+    `izc_deep` / `izc_wide` are optional: the re-rendered low-redshift contaminants of
+    `kn-izc-windows`. They enter as contaminants and their group is their PARENT, which is the same
+    group string the parent itself carries, so a parent and its re-renderings never straddle the
+    split."""
     global MAG_MEAN, MAG_STD, SIGMA_MAG_MEAN, SIGMA_MAG_STD
 
-    big, meta = _load_or_build(cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_wide, verbose)
+    big, meta = _load_or_build(
+        cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep, izc_wide, verbose
+    )
 
     label_by_index = np.where(meta["is_kn"], GROUP_TO_LABEL["KN"], GROUP_TO_LABEL["other"])
 

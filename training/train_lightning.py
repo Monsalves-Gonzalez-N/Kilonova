@@ -176,6 +176,7 @@ class LitKilonova(L.LightningModule):
 
 def train(
     data_dir,
+    use_izc,
     epochs,
     batch_size,
     learning_rate,
@@ -194,15 +195,31 @@ def train(
 ):
     L.seed_everything(seed)
 
+    # The low-redshift contaminants are a SEPARATE cache: the token cache is keyed by the source
+    # files it was built from, so switching this flag rebuilds rather than silently reusing tokens
+    # from the other mix. Two files rather than one keeps both mixes warm on the same machine.
+    izc_deep = os.path.join(data_dir, "izc_windows_deep.parquet") if use_izc else None
+    izc_wide = os.path.join(data_dir, "izc_windows_wide.parquet") if use_izc else None
+    for path in (izc_deep, izc_wide):
+        if path is not None and not os.path.exists(path):
+            raise SystemExit(
+                f"{path} is missing: run `kn-izc-windows` or `dvc pull` it, or pass --no-izc to "
+                "train on the OpenUniverse contaminants alone"
+            )
+    cache_name = "openuniverse_tokens_izc.npz" if use_izc else "openuniverse_tokens.npz"
+
     data = build_dataloaders(
         kn_deep=os.path.join(data_dir, "kn_windows_deep.parquet"),
         kn_wide=os.path.join(data_dir, "kn_windows_wide.parquet"),
         contaminant_deep=os.path.join(data_dir, "early_windows_deep.parquet"),
         contaminant_wide=os.path.join(data_dir, "early_windows_wide.parquet"),
+        izc_deep=izc_deep,
+        izc_wide=izc_wide,
         batch_size=batch_size,
         num_workers=num_workers,
-        cache_path=os.path.join(data_dir, "openuniverse_tokens.npz"),
+        cache_path=os.path.join(data_dir, cache_name),
     )
+    print(f"low-redshift contaminants (izc): {'IN' if use_izc else 'OUT'}")
     train_loader = data["train_loader"]
     regime_loaders = data["validation_regime_loaders"]
     validation_loaders = [regime["loader"] for regime in regime_loaders]
@@ -326,7 +343,17 @@ def parse_arguments():
     parser.add_argument(
         "--data-dir",
         default="data/openuniverse",
-        help="directory holding the kn_windows_*.parquet and early_windows_*.parquet",
+        help="directory holding the kn_windows_*.parquet, early_windows_*.parquet and "
+        "izc_windows_*.parquet",
+    )
+    # On by default: the izc sample exists to remove the redshift shortcut from the training set,
+    # so training without it is the ablation and not the baseline.
+    parser.add_argument(
+        "--no-izc",
+        dest="use_izc",
+        action="store_false",
+        help="train on the OpenUniverse contaminants alone, without the re-rendered low-redshift "
+        "ones (the ablation)",
     )
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch-size", type=int, default=512)
@@ -361,6 +388,7 @@ if __name__ == "__main__":
     arguments = parse_arguments()
     train(
         data_dir=arguments.data_dir,
+        use_izc=arguments.use_izc,
         epochs=arguments.epochs,
         batch_size=arguments.batch_size,
         learning_rate=arguments.learning_rate,
