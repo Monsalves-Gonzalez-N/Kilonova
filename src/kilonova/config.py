@@ -23,6 +23,7 @@ DEFAULT_PATHS_FILE = REPOSITORY_ROOT / "configs" / "paths.yaml"
 @dataclass
 class PathsConfig:
     openuniverse_source: Path | None = None  # directory with snana_*.hdf5 + snana_*.parquet pairs
+    openuniverse_catalogs: Path | None = None  # directory with the 33 snana_*.parquet catalogues
     openuniverse_hdf5: Path | None = None  # single-field SED hdf5 (kn-early-windows)
     openuniverse_catalog: Path | None = None  # single-field object catalog parquet
     lanl_spectra: Path | None = None  # cached LANL rest-frame spectra parquet (kn-cache-lanl output)

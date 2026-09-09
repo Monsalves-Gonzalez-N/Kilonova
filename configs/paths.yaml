@@ -5,6 +5,9 @@
 # Migrado del T7 a Dropbox el 2026-07-31. El ~ vale en las dos maquinas (lo expande _resolve), asi
 # que esta linea ya no depende del punto de montaje de un disco externo.
 openuniverse_source: ~/Dropbox/Kilonova/openuniverse2025
+# Solo los catalogos (135 MB), sin las light curves: es lo que kn-izc-windows lee para elegir
+# padres. Las hdf5 que van con ellos siguen en openuniverse_source.
+openuniverse_catalogs: data/openuniverse/snana_catalogs
 openuniverse_hdf5: data/openuniverse/snana_10307_full.hdf5
 openuniverse_catalog: data/openuniverse/snana_10307.parquet
 lanl_spectra: data/dust_generation/lanl_spectra.parquet

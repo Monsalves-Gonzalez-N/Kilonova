@@ -19,12 +19,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 
+from kilonova.config import load_paths, require
 from kilonova.photometry.roman_noise import build_tier_constants
 from kilonova.photometry.spectra import ALL_ROMAN_BANDS
+from kilonova.simulation import openuniverse_parents
 from kilonova.simulation.intermediate_z_contaminants import (
     CLASS_FRACTION,
     build_izc_windows,
-    draw_population,
+    core_collapse_source_by_template_index,
+    draw_class_population,
+    measure_population_brightness,
     roman_light_curve,
     saturation_magnitude,
 )
@@ -40,12 +44,17 @@ BAND_COLOUR = {
 REDSHIFTS = (0.02, 0.05, 0.10, 0.20, 0.40)
 
 
-def one_realization(label, redshift, random_generator):
-    """A drawn realization of `label` at `redshift`, however many draws that takes."""
-    while True:
-        realization = draw_population(1, np.array([redshift]), random_generator)[0]
-        if realization["label"] == label:
-            return realization
+def measure_brightness(population, source_directory):
+    """Read every parent's own brightness out of the release, one hdf5 at a time.
+
+    Without it the figure plots objects at the generator's reference magnitude, which is a plausible
+    supernova but not THIS supernova: the right-hand panel is a detection and a saturation check, so
+    the magnitude has to be the one the sample will carry."""
+    by_healpix = {}
+    for realization in population:
+        by_healpix.setdefault(realization["parent_healpix"], []).append(realization)
+    for healpix, block in sorted(by_healpix.items()):
+        measure_population_brightness(block, Path(source_directory) / f"snana_{healpix}.hdf5")
 
 
 def plot_model(axes, curves, realization):
@@ -103,16 +112,39 @@ def main():
         "--output", type=Path, default=Path("data/openuniverse/izc_lightcurve_validation.pdf")
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--catalogs", type=Path, default=None, help="directory of the OpenUniverse snana_*.parquet"
+    )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=None,
+        help="directory of the snana_*.hdf5; without it every object is plotted at the generator's "
+        "reference magnitude instead of at its parent's own",
+    )
     arguments = parser.parse_args()
+
+    paths = load_paths()
+    catalog = openuniverse_parents.read_parent_catalog(
+        require(arguments.catalogs or paths.openuniverse_catalogs, "openuniverse_catalogs")
+    )
+    source_by_template_index = core_collapse_source_by_template_index(catalog)
 
     random_generator = np.random.default_rng(arguments.seed)
     bright_limit = saturation_magnitude("deep")
     deep_bands = build_tier_constants("deep")["bands"]
 
+    population = {}
+    for label in CLASS_FRACTION:
+        drawn = draw_class_population(catalog, label, REDSHIFTS, random_generator, source_by_template_index)
+        population.update({(label, one["redshift"]): one for one in drawn})
+    if arguments.source:
+        measure_brightness(list(population.values()), arguments.source)
+
     with PdfPages(arguments.output) as pdf:
         for label in CLASS_FRACTION:
             for redshift in REDSHIFTS:
-                realization = one_realization(label, redshift, random_generator)
+                realization = population[(label, redshift)]
                 curves = roman_light_curve(realization)
                 if not curves:
                     continue

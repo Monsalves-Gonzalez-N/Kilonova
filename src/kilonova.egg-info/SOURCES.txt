@@ -13,6 +13,7 @@ src/kilonova/cli/__init__.py
 src/kilonova/cli/cache_lanl.py
 src/kilonova/cli/early_windows.py
 src/kilonova/cli/extinguish.py
+src/kilonova/cli/izc_windows.py
 src/kilonova/cli/kilonova_windows.py
 src/kilonova/cli/run_all_openuniverse.py
 src/kilonova/datasets/__init__.py
@@ -23,9 +24,17 @@ src/kilonova/photometry/spectra.py
 src/kilonova/simulation/__init__.py
 src/kilonova/simulation/early_windows.py
 src/kilonova/simulation/extinction.py
+src/kilonova/simulation/intermediate_z_contaminants.py
 src/kilonova/simulation/lanl_cache.py
+src/kilonova/simulation/openuniverse_parents.py
+src/kilonova/validation/__init__.py
+src/kilonova/validation/csp.py
 tests/test_config.py
+tests/test_csp_validation.py
 tests/test_datasets.py
 tests/test_early_windows.py
 tests/test_extinction.py
+tests/test_intermediate_z_contaminants.py
+tests/test_lanl_cache.py
 tests/test_roman_noise.py
+tests/test_spectra.py

@@ -114,6 +114,9 @@ data/csp/
 # Catalogos snana de OpenUniverse (135 MB, 33 healpix): los baja
 # data/openuniverse/download_openuniverse_snana.sh y son entrada, no producto.
 data/openuniverse/snana_catalogs/
+# Shards por healpix de kn-izc-windows: el proceso los borra al terminar, pero una corrida
+# interrumpida los deja.
+data/openuniverse/.izc_shards/
 
 # Archivo de plantillas de snsedextend: camino descartado el 9-sep-2026 (ver el docstring de
 # scripts/build_v19_extended_templates.py). El script se versiona, el artefacto de 14 MB no.

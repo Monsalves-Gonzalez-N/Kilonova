@@ -41,7 +41,9 @@ import pandas as pd
 from astropy.cosmology import Planck18
 from matplotlib.backends.backend_pdf import PdfPages
 
+from kilonova.config import load_paths, require
 from kilonova.simulation import intermediate_z_contaminants as izc
+from kilonova.simulation import openuniverse_parents
 from kilonova.validation import csp
 
 # Rest-frame phases the model is drawn on, per kind of time origin. Fine enough that the curve
@@ -103,23 +105,25 @@ LETTER_COLOUR = {
 # The type II release gives no subtype and the generator splits the class in three. Rejecting on
 # the set rather than on one name keeps the subtypes in the generator's own proportions, which is
 # also the mix the classifier sees: all three carry OpenUniverse gentype 32.
-LABELS_OF = {"SN II": ("SN IIP", "SN IIL", "SN IIn")}
+# OpenUniverse drew no SN IIn -- see the SOURCES_BY_LABEL block of the generator -- so the class is
+# gone from both sides and the type II release maps onto the two subtypes that exist.
+LABELS_OF = {"SN II": ("SN IIP", "SN IIL")}
 
 
-def draw_class_population(label, redshift, count, random_generator):
+def draw_class_population(catalog, label, redshift, count, random_generator, source_by_template_index):
     """`count` realizations of one izc class at one redshift.
 
-    `draw_population` picks the class itself, from CLASS_FRACTION, which is the right interface for
-    generating a sample and the wrong one here: this figure compares an observed SN Ib against the
-    SN Ib the generator makes. Rejection is the cheapest way to keep the class's own draws -- the
-    luminosity function, the template choice, the SALT2 shape and colour -- exactly as the generator
-    draws them, rather than reimplementing them next to it."""
-    wanted = LABELS_OF.get(label, (label,))
-    realizations = []
-    while len(realizations) < count:
-        batch = izc.draw_population(4 * count, np.full(4 * count, redshift), random_generator)
-        realizations.extend(one for one in batch if one["label"] in wanted)
-    return realizations[:count]
+    The brightness comes out at the generator's reference magnitude rather than measured off a
+    parent's light curve, and this comparison is built to be indifferent to it: every residual here
+    is a difference of two magnitudes of the same object, and the one free scale left -- the host
+    dust screen -- is fitted per class over the optical. See `izc.draw_class_population`."""
+    return izc.draw_class_population(
+        catalog,
+        LABELS_OF.get(label, (label,)),
+        np.full(count, redshift),
+        random_generator,
+        source_by_template_index,
+    )
 
 
 @cache
@@ -417,7 +421,20 @@ def main():
     parser.add_argument("--classes", nargs="*", default=list(CLASS_ORDER))
     parser.add_argument("--limit", type=int, default=None, help="only the first N supernovae")
     parser.add_argument("--sn", nargs="*", default=None, help="only these supernovae, by name")
+    parser.add_argument(
+        "--catalogs",
+        type=Path,
+        default=None,
+        help="directory of the OpenUniverse snana_*.parquet the generator draws its parents from "
+        "(default: the configured openuniverse_catalogs)",
+    )
     arguments = parser.parse_args()
+
+    paths = load_paths()
+    catalog = openuniverse_parents.read_parent_catalog(
+        require(arguments.catalogs or paths.openuniverse_catalogs, "openuniverse_catalogs")
+    )
+    source_by_template_index = izc.core_collapse_source_by_template_index(catalog)
 
     metadata = csp.load_metadata()
     photometry = csp.load_photometry()
@@ -457,7 +474,12 @@ def main():
             published_distance = np.isfinite(supernova["distance_modulus"])
             redshift = float(supernova["redshift"] if published_distance else supernova["redshift_cmb"])
             realizations = draw_class_population(
-                supernova["label"], redshift, arguments.realizations, random_generator
+                catalog,
+                supernova["label"],
+                redshift,
+                arguments.realizations,
+                random_generator,
+                source_by_template_index,
             )
             model_days, model_curves = model_band_curves(realizations, bandpasses, redshift, epoch_kind)
             drawn_sources = sorted({one["source_name"] for one in realizations})

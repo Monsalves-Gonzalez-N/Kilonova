@@ -6,8 +6,8 @@ and finds one defect that survives every control: the near-infrared decline rate
 of two magnitudes of the same object) and immune to host dust (a dust screen does not change a
 decline rate), which is what makes it the firmest result of that comparison.
 
-It is also, as measured there, a statement about only half of the generator. `izc.draw_population`
-gives a SN Ia `salt3-nir` above z = 0.05 and `salt2-extended` below, because `salt3-nir` stops at
+It is also, as measured there, a statement about only half of the generator. The generator used to
+give a SN Ia `salt3-nir` above z = 0.05 and `salt2-extended` below, because `salt3-nir` stops at
 20000 A rest-frame and cannot reach the red edge of F184 at lower redshift. Every CSP SN Ia with a
 near-infrared decline measurement sits below z = 0.05, so the whole of that +0.38 mag was measured
 on the fallback, and the model that carries most of the generated sample was never tested.
@@ -16,12 +16,12 @@ Nothing forces that split here. The constraint that imposes it is Roman's F184, 
 band is H, which ends at 18676 A -- inside `salt3-nir` at every redshift in this sample. So both
 sources can be put under the same photometry, and this script does exactly that.
 
-The comparison is paired, which is the point. Each drawn realization is used twice, with its
-source name overwritten and everything else -- x1, colour, the drawn peak absolute magnitude --
-left as `draw_population` drew it. Both sources are normalised in rest-frame B through the same
-`set_source_peakabsmag` call, so the two models are the same supernova with the same B magnitude
-and differ only in the spectral shape that carries it into the near-infrared. Any difference in the
-residuals is that shape and nothing else.
+The comparison is paired, which is the point. Each realization is used twice, with its source name
+overwritten and everything else -- the parent's own x1 and colour, and the reference magnitude both
+sources are normalised to -- left as `izc.draw_class_population` built it. Both are normalised in
+rest-frame B through the same `set_source_peakabsmag` call, so the two models are the same supernova
+with the same B magnitude and differ only in the spectral shape that carries it into the
+near-infrared. Any difference in the residuals is that shape and nothing else.
 """
 
 import argparse
@@ -32,6 +32,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from kilonova.config import load_paths, require
+from kilonova.simulation import intermediate_z_contaminants as izc
+from kilonova.simulation import openuniverse_parents
 from kilonova.validation import csp
 
 SALT_SOURCES = ("salt2-extended", "salt3-nir")
@@ -184,7 +187,19 @@ def main():
     parser.add_argument("--realizations", type=int, default=60)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--catalogs",
+        type=Path,
+        default=None,
+        help="directory of the OpenUniverse snana_*.parquet (default: openuniverse_catalogs)",
+    )
     arguments = parser.parse_args()
+
+    paths = load_paths()
+    catalog = openuniverse_parents.read_parent_catalog(
+        require(arguments.catalogs or paths.openuniverse_catalogs, "openuniverse_catalogs")
+    )
+    source_by_template_index = izc.core_collapse_source_by_template_index(catalog)
 
     metadata = csp.load_metadata()
     photometry = csp.load_photometry()
@@ -222,7 +237,12 @@ def main():
         )
         bandpasses = sorted(set(observed["bandpass"]), key=csp.BANDPASS_ORDER.index)
         realizations = comparison.draw_class_population(
-            "SN Ia", redshift, arguments.realizations, random_generator
+            catalog,
+            "SN Ia",
+            redshift,
+            arguments.realizations,
+            random_generator,
+            source_by_template_index,
         )
         residual_rows.extend(
             residual_rows_of_supernova(supernova, observed, bandpasses, redshift, realizations)

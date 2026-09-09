@@ -15,152 +15,112 @@ will not find one at z = 3 -- so nothing here touches the faint end; only the un
 
 Nothing in `training/` imports this, and this imports nothing from `training/`. It writes its own
 parquet files with the window schema of `build_window_from_model`, so a generated sample can be
-inspected and thrown away without the training path ever knowing it existed.
+inspected and thrown away without touching the training path. What the training path does know is
+how to READ one: `training/openuniverse_data.py` takes the two `izc_windows_{tier}.parquet` as
+optional inputs and reads the split group off the `object_id`, which is where the parent it was
+re-rendered from is written down.
 
-WHAT EACH CLASS IS MADE OF. Every choice below is argued where it is made; this is the index.
+WHAT AN OBJECT OF THIS SAMPLE IS. Not a draw from a luminosity function: a real OpenUniverse
+object, re-rendered at a redshift it did not have. `openuniverse_parents.read_parent_catalog`
+supplies the parents -- 1 323 089 of them over the 33 healpix -- and a re-rendered object inherits
+from its parent everything the release records about it:
 
-    class     spectral model                     luminosity function from     calibrated?
-    -------   --------------------------------   --------------------------   -----------
-    SN Ia     salt3-nir (Pierel et al. 2022),    a Gaussian fitted to           no
-              held flat to 21000 A                OpenUniverse's own salt2_mB
-    SN Iax    SN 2005hk warped by Jha & Dai's    the replayed template bank,    no
-              model, the bank replayed            row by row
-    SN Ib     SNANA NON1A + nugent-sn1bc         OpenUniverse's peak_mag_g      YES
-    SN Ic     SNANA NON1A + nugent-hyper         OpenUniverse's peak_mag_g      YES
-    SN IIP    nugent-sn2p + 23 SNANA NON1A       Richardson et al. (2014)       YES
-    SN IIL    nugent-sn2l                        Richardson et al. (2014)       YES
-    SN IIn    nugent-sn2n                        Richardson et al. (2014)       YES
-    TDE       MOSFiT `tde` (Guillochon+ 2018)    MOSFiT's own physics           no
+    inherited                    from
+    --------------------------   -------------------------------------------------------------
+    class                        `gentype`, with SN IIP / SN IIL resolved from the template
+    spectral model               `template_index`: into the 44 core-collapse templates
+                                 OpenUniverse drew, or into the 919-row SN Iax bank it drew, or
+                                 the SALT source it used for SN Ia
+    shape and colour (SN Ia)     `salt2_x1`, `salt2_c`
+    host dust screen             `AV`, `RV` -- present only where OpenUniverse put one
+    brightness                   MEASURED off the parent's own light curve, see below
 
-The third column is where each luminosity function STARTED, not what its median is now. Two
-different quantities live there and confusing them wastes a session: OpenUniverse's `salt2_mB` and
-`peak_mag_g` are catalogue columns read once to seed the luminosity function, while the CALIBRATION
-is anchored on something else entirely -- M(Y106). For a calibrated class the median below no
-longer equals its seed.
+Three things are drawn here and nothing else: the redshift, the phase of the survey's visit grid,
+and the parity of the first visit. That is the whole point of the sample. The object is the same
+object; only the distance is one the survey does not have an object at.
 
-"Calibrated" means the median of the luminosity function carries a measured offset that makes the
-class reproduce OpenUniverse's own median M(Y106): the brightest Y106 `mag_true` of the window
-minus the distance modulus, deep tier, z < 0.45, both populations after the same detection cut.
-`scripts/calibrate_izc_brightness.py` measures it and PEAK_ABSOLUTE_MAGNITUDE records it. One band
-because the offset is one scalar per class -- more bands would measure the same number five times,
-not fit five. Y106 is the anchor because it is mid-range, present in both tiers, and at these
-redshifts still samples the rest-frame red optical, where these templates are observed rather than
-extrapolated; anchoring on F184 would put the module's largest declared uncertainty inside the
-anchor. What a scalar cannot move is the COLOUR, which the templates set, so the same script also
-reports the per-band residual as a diagnostic that adjusts nothing. It is formed PER OBJECT --
-median of M(band) - M(Y106) on objects detected in both, one population against the other -- which
-differences away the distance and the brightness and leaves the shape of the SED. Measured on 2500
-objects a class, in magnitudes, positive meaning the izc class is REDDER than OpenUniverse's:
+THE SPECTRAL MODEL IS ALWAYS THE PARENT'S OWN, and the sample's scope is drawn to keep it that
+way. Core-collapse (SN Ib, SN Ic, SN IIP, SN IIL) are OpenUniverse's own templates, read out of the
+release; SN Ia is SALT, which is what OpenUniverse itself drew from. There is no class left whose
+SED this side supplies -- see NO SUBSTITUTIONS below for the two that were dropped to get here.
 
-    class     Z087     J129     H158     F184     reading
-    -------   ------   ------   ------   ------   -------------------------------------------
-    SN Ia     +0.001   -0.002   -0.014   -0.017   the control: both sides are SALT3
-    SN Iax    -0.044   +0.031   +0.059   +0.069   same model on both sides, and it shows
-    SN Ib     -0.112   -0.013   +0.079   +0.153   mixed
-    SN II     +0.025   -0.118   -0.181   -0.271   monotonic in wavelength: OpenUniverse redder
-    SN Ic     -0.026   -0.157   -0.034   +0.285   not monotonic, sign flips, unexplained
-    TDE       +0.053   -0.043   -0.077   -0.100   small, and it is a model substitution anyway
+HOW THE BRIGHTNESS IS MEASURED, which is what replaces every luminosity function this module used
+to carry. For a parent at z_parent the generator renders the PARENT'S OWN model at z_parent,
+normalised to an arbitrary reference absolute magnitude, and takes the peak magnitude of each Roman
+band over the same rest-frame phase window the parent's light curve is read over. The median over
+the bands both sides cover,
 
-SN Ia and SN Iax are the two classes whose spectral model is the same on both sides, and they are
-the two that come out flat. That is the control passing: the statistic is measuring the library,
-not the machinery. The core-collapse classes are where the libraries differ and they are where the
-residual is, up to 0.27 mag in F184 for SN II -- in the direction the module predicted, since the
-V19+HostXT SEDs OpenUniverse used are redder in the near-infrared than the SNANA and Nugent ones
-here.
+    offset = median_band [ m_parent(band) - m_rendered(band | M = REFERENCE_ABSOLUTE_MAGNITUDE) ]
 
-THAT ORDERING IS MISLEADING ON ITS OWN, and the width is what fixes it. A classifier does not see
-a median, it sees an object against the spread of the class, so the residual that matters is the
-one measured in units of the population's own colour scatter. Same measurement, divided by the izc
-sigma the script now also records:
+is the parent's own absolute magnitude expressed in units of the reference, and rendering that same
+model at the DRAWN redshift with M = REFERENCE_ABSOLUTE_MAGNITUDE + offset is the object at its new
+distance. The reference cancels exactly -- it enters both renders identically and only their
+difference survives -- so no photometric system, no normalisation band and no phase-zero convention
+has to be argued about. The three per-class conventions that carried those arguments
+(`PEAK_ABSOLUTE_MAGNITUDE_BAND`, `iax_phase_zero_offset`, `tde_peak_absolute_magnitudes`) are gone
+with them, and so is the per-class brightness calibration against OpenUniverse's median M(Y106):
+a per-object measurement cannot be off by a class-wide offset, which is what that calibration
+existed to remove.
 
-    class     Z087   J129   H158   F184     izc sigma in F184  vs OpenUniverse's
-    -------   ----   ----   ----   ----     -----------------  -----------------
-    SN Ia     0.02   0.03   0.14   0.15     0.114              0.157
-    SN Iax    0.37   0.22   0.35   0.31     0.226              0.264
-    SN Ic     0.04   0.28   0.05   0.44     0.648              0.213
-    SN II     0.13   0.44   0.60   0.61     0.446              0.418
-    SN Ib     0.71   0.04   0.21   0.26     0.582              0.248
-    TDE       1.61   1.59   1.57   1.59     0.063              0.024
+WHY A MEDIAN OVER BANDS AND NOT ONE BAND. Which bands are usable is a function of z_parent, so no
+single band serves the catalogue: the median parent sits at z = 1.5, where the blue Roman bands
+sample rest-frame ultraviolet the templates do not reach. F184 is covered at every redshift and
+R062 only below z = 0.6. The median over the covered ones also puts a band-to-band disagreement
+between the template and the parent into the SPREAD of the offset rather than into the offset, and
+that spread is recorded per object (`brightness_residual`) instead of being averaged away.
 
-TDE is the worst class by this measure and it is not close, even though its raw residual is the
-second smallest in the table. Its colour has almost no scatter on either side -- a MOSFiT
-photosphere is a blackbody and AT2019qiz is one observed SED -- so a tenth of a magnitude is more
-than one and a half population widths, where the same tenth of a magnitude inside SN II's 0.45 mag
-spread is a fifth of one. Read this way the ordering of the sample's colour problems is TDE first
-by a factor of two and a half, then SN Ib in Z087, then SN II in the near-infrared.
+WHAT THE MEASUREMENT DOES NOT FIX, and must not be read as fixing: the colour. One number per
+object cannot move the shape of an SED. Where the spectral model is the parent's own the rendering
+and the parent differ only by this pipeline, and `brightness_residual` measures that difference
+object by object. That is now the whole of it, because the two classes whose colour was the
+substitution's rather than the parent's are no longer generated. It is a diagnostic and adjusts
+nothing.
 
-The last column carries a second finding, which is not about the median at all: SN Ic and SN Ib are
-three and two times WIDER in colour than the OpenUniverse classes they stand in for, and SN Ia is
-narrower. A distribution of the right centre and the wrong width is separable too, and for SN Ic --
-0.648 against 0.213 in F184 -- the width is the larger discrepancy by far. Its likely cause is
-visible in SOURCES_BY_LABEL: the class is a heterogeneous set of templates spanning `nugent-hyper`,
-the broad-lined SN 1998bw, and each draw takes one whole template rather than interpolating, so the
-template-to-template colour scatter enters the population directly. The SN Ia case is the opposite
-sign and has its own named cause: SALT2_C is drawn as a Gaussian, and the distribution OpenUniverse
-drew `c` from (Scolnic & Kessler 2016) is skewed, not Gaussian.
+THE PARENTS ARE THE GENERATED POPULATION, NOT THE DETECTED ONE, and that is a trap this module
+used to fall into. The catalogues hold 1 323 089 objects and the early windows hold 880 000: the
+difference is the survey's detection cut. Fitting a distribution to the detected half imports its
+Malmquist selection into a sample generated at redshifts that have none -- the SN Ia shape and
+colour of this module were once fitted that way, and came out as the blue, broad end of the
+population, worth 0.03 mag of colour and 0.02 of shape in the largest class of the sample. Drawing
+parents from the catalogue removes the question rather than answering it.
 
-WHAT THIS MEANS AND WHAT IT DOES NOT. It is NOT a bug to fix by tuning: a scalar luminosity offset
-cannot move a colour, and warping a template to match another template would replace a measured
-disagreement with a fitted one. It IS a limitation with teeth, because the library split is aligned
-with redshift -- V19 above, SNANA/Nugent below -- so a colour offset that depends on the library
-looks to the classifier exactly like a colour offset that depends on redshift, which is the shape
-of the shortcut this module exists to remove. The size above bounds it: 0.27 mag in the worst band
-of the worst class against the four magnitudes of the brightness shortcut. It belongs in the paper
-with that comparison, and the test that settles it is whether a classifier can separate izc from
-OpenUniverse contaminants AT FIXED REDSHIFT in the range where both exist.
+The redshift distribution is not chosen here at all: `draw_population_from_parents` takes it from
+its caller, and `kn-izc-windows` supplies the deficit of `redshift_deficit`.
 
-SN Ic is the one line here that is not understood: the residual is not monotonic in wavelength and
-changes sign, which is structure rather than a colour temperature offset, and nothing in the choice
-of library predicts it.
+NO SUBSTITUTIONS, and that is a scope decision rather than an achievement. The sample exists to
+REPOPULATE the low-redshift bins of a population OpenUniverse already defines. A class whose SED
+this side has to supply is not being moved in redshift, it is being added, and the sample would
+then have to be defended as a model of that class rather than as a redistribution of
+OpenUniverse's. So three kinds of class are out:
 
-The three uncalibrated classes are uncalibrated on purpose: their brightness is not a free
-parameter to fit, it comes from a published model, and moving it would make the class agree by
-construction instead of by model.
+  * TDE. OpenUniverse's is the observed SED of AT2019qiz, never published as a usable template.
+    MOSFiT's `tde` stood in for it and reproduced OpenUniverse's own photometry of its own objects
+    to 0.19 mag, against 0.01 mag for the classes that remain, with a clear colour trend.
+  * SN Iax. OpenUniverse's own model, but REGENERATED here from the published Rutgers notebook
+    rather than read from the release -- the one class where the release ships no template this
+    side can read. The regeneration is faithful enough to replay the notebook's own numbers and
+    still lands 0.05 mag off OpenUniverse's photometry, which is the reimplementation showing.
+  * SLSN-I and PISN (0.39 % of the mix), and every gentype `openuniverse_parents.PARENT_GENTYPES`
+    does not list, for the older reason that they have no usable template on this side at all.
 
-Two further sources of population, both measured off OpenUniverse rather than assumed: the SN Ia
-shape and colour (SALT2_X1, SALT2_C) and the SN Iax host dust screen (IAX_HOST_AV_RANGE), which is
-the only extinction this module applies to anything. The redshift distribution is not chosen here
-at all -- `draw_population` takes it from its caller.
+The models for the first two are still in this file, with their provenance and their tests, and
+nothing draws them: putting one back means adding its label to CLASS_FRACTION and its gentype to
+PARENT_GENTYPES, and re-opening the argument above.
 
-Two substitutions the sample carries, both declared rather than hidden:
+There used to be a substitution larger than either, the core-collapse SEDs. It is gone -- those
+templates are now read out of OpenUniverse's own release, see OPENUNIVERSE_ARCHIVE_PATH -- and the
+limitation it carried is gone with it. Where this module once put the SNANA and Nugent libraries
+below z = 0.91 and OpenUniverse's V19+HostXT above, which is a difference aligned with redshift and
+therefore the exact shape of the shortcut this sample exists to remove, both halves are now the
+same 44 templates.
 
-  * OpenUniverse drew core-collapse SEDs from `NON1ASED.V19_CC+HostXT_WAVEEXT`. Its BASE templates
-    are public and were checked here rather than assumed: `NON1ASED.V19_CC+HostXT` ships in the
-    SNANA SNDATA_ROOT distribution (Zenodo record 4015325), 67 `pycoco_*.SED.gz` files, and its
-    `SIMGEN_INCLUDE_NON1A.INPUT` carries 17 SNTYPE 20 (IIP) + 7 SNTYPE 22 (IIL) = 24 II, 13 Ib and
-    7 Ic -- exactly the 24/13/7 the OpenUniverse paper reports, so this is not a lookalike set but
-    the same one, with the per-template rate weights and luminosity functions that simulation used.
-    What is NOT public is the `_WAVEEXT` half of the name. Those templates run 1605 to 11000 A,
-    measured off the files, and the string `WAVEEXT` appears nowhere in either the 14 216 entries
-    of the 2024-07-04 release, contemporaneous with OpenUniverse2024, or the 14 396 of the
-    2026-04-10 one: the six NON1ASED models shipped are J17_CC, K10_CC, P18_CC, S11_CC,
-    V19_CC+HostXT and V19_CC_noHostXT. The extension to 25000 A by the methods of Pierel et al.
-    (2018) is what is missing, and 11000 A covers Roman only for z >= 0.91 -- the opposite of the
-    range needed here. So the sources below are the SNANA NON1A and Nugent libraries, which sncosmo
-    ships already extended. Different library for the low-redshift half of the contaminants than
-    for the high-redshift half.
-
-    That is a substitution of convenience and there is a better path, not taken yet: `snsedextend`
-    (Pierel, on PyPI) is the public implementation of the very method OpenUniverse cites, so the
-    published 11000 A templates can be extended HERE, by that method, instead of being replaced by
-    a different library. Same base templates as OpenUniverse and the same extension procedure,
-    which is what the colour residual needs in order to mean anything.
-  * OpenUniverse's TDE is the observed SED of AT2019qiz, which is not published as a usable
-    template; MOSFiT's `tde` stands in for it. SLSN-I and PISN (0.39 % of the mix) are left out
-    entirely for the same reason.
-
-SN Iax is NOT a substitution and is the one class regenerated from OpenUniverse's own model rather
-than a lookalike -- same base SED, same warps, same template bank, same index. See the SN Iax
-block below for what that took.
-
-And one limitation that no choice of library removes: at high redshift the Roman bands sample the
-rest-frame optical, which these templates measure; at low redshift they sample the rest-frame
-near-infrared, which for core-collapse supernovae is poorly observed and is extrapolation in every
-library. The izc sample carries more model uncertainty in H158 and F184 than the OpenUniverse one.
-
-That extrapolation is measured, not just declared: `scripts/compare_csp_lightcurves.py` puts these
-same models, continuous, under the discrete uBgVriYJH photometry of the Carnegie Supernova Project
-at the redshifts this module generates. Every class here has a CSP counterpart except the TDE.
+The near-infrared extrapolation those templates carry is OpenUniverse's own and is shared by both
+populations rather than added by this one: `_WAVEEXT` is an extension by the methods of Pierel et
+al. (2018), and every OpenUniverse contaminant above z = 0.91 already rests on it. What remains
+worth measuring is whether these models reproduce real supernovae at the redshifts this sample
+generates, and that is measured rather than declared: `scripts/compare_csp_lightcurves.py` puts
+them, continuous, under the discrete uBgVriYJH photometry of the Carnegie Supernova Project. Every
+class here now has a CSP counterpart, the TDE having been the one that did not.
 """
 
 from functools import cache
@@ -176,6 +136,7 @@ from kilonova.photometry.roman_noise import (
     collecting_area_cm2,
 )
 from kilonova.photometry.spectra import ALL_ROMAN_BANDS, spectrum_to_roman_magnitudes
+from kilonova.simulation import openuniverse_parents
 from kilonova.simulation.early_windows import (
     CADENCE_PARITY_PERIOD,
     GENTYPE_LABEL,
@@ -222,7 +183,12 @@ def openuniverse_cosmology():
 # separable from a real one in the parquet while `label` still maps it to the same class.
 IZC_GENTYPE_OFFSET = 200
 
-# --- SN Iax ------------------------------------------------------------------------------------
+# --- SN Iax (RETAINED, NOT GENERATED) ------------------------------------------------------------
+# Not in CLASS_FRACTION and not in PARENT_GENTYPES: this is the one class where OpenUniverse ships
+# no template this side can read, so its SED has to be regenerated here rather than moved, and the
+# regeneration lands 0.05 mag off OpenUniverse's own photometry. See NO SUBSTITUTIONS in the module
+# docstring. Everything below is kept, with its tests, so that re-enabling it is a two-line change
+# and not a re-derivation.
 # NOT a substitution: this is OpenUniverse's own model, regenerated. OpenUniverse used "1000 SED
 # templates from the original PLAsTiCC model" (OpenUniverse2024, sec. 4.2), which is Jha & Dai's
 # model released at github.com/RutgersSN/SNIax-PLAsTiCC (commit 908762c, BSD-3): a single SN 2005hk
@@ -318,32 +284,17 @@ IAX_WARP_KERNEL_SIGMA_DEX = 0.2
 IAX_WARP_R_GAIN = 1.095  # the notebook's own factor, which keeps dm15(B) where the first warp put it
 IAX_PRE_EXPLOSION_SUPPRESSION = 2000.0
 
-# Host extinction, and the only class in this module that gets an explicit dust screen. See the
-# host extinction block below for why the others do not: SN Ia carry theirs inside SALT's `c` and
-# the OpenUniverse core-collapse classes carry none at all. SN Iax is the class OpenUniverse dusts
-# by hand, and leaving it undusted here left the izc Iax half a magnitude brighter and bluer than
-# the OpenUniverse Iax of the same class -- a class-correlated offset of exactly the kind the
-# sample exists to remove.
-#
-# Measured off OpenUniverse's own 115 645 SNe Iax: RV is 3.1 for every one of them, and AV is
-# bounded at 0.001 and 3.0, which are SNANA's generation limits and are reproduced here rather than
-# smoothed over. The shape is the Wood-Vasey et al. (2007) eq. 2 form OpenUniverse names for its
-# other dusted classes, exp(-AV/tau) + W exp(-AV^2/2 sigma^2).
-#
-# The three parameters are a FIT to OpenUniverse's realized AV values, not OpenUniverse's own
-# declared inputs, which the catalogues do not carry. Read them as a parameterisation and not as a
-# provenance: (sigma, W) are degenerate against each other and the pair that comes out is a broad
-# second component rather than the narrow core the form is usually written for. What is checked is
-# the distribution itself, and it is reproduced to a KS distance of 0.0015 -- every percentile from
-# the 1st to the 99th within 0.015 mag, the median to 0.000 and the mean to 0.001.
-IAX_HOST_AV_RANGE = (0.001, 3.0)
-IAX_HOST_AV_TAU = 1.010
-IAX_HOST_AV_SIGMA = 0.555
-IAX_HOST_AV_WEIGHT = 2.40
-IAX_HOST_AV_STEP = 0.0005
-IAX_HOST_RV = 3.1
+# Host extinction: the PARENT'S OWN screen, `AV` and `RV` straight out of the catalogue. SN Iax is
+# the one class OpenUniverse dusts by hand -- RV is 3.1 for all 115 645 of them and AV runs between
+# SNANA's generation limits of 0.001 and 3.0 -- and this module used to reproduce that distribution
+# by fitting it, which is now unnecessary: the object being re-rendered carries the screen it was
+# given. See the host extinction block below for why no other class gets one.
 
-# --- TDE ---------------------------------------------------------------------------------------
+# --- TDE (RETAINED, NOT GENERATED) ---------------------------------------------------------------
+# Not in CLASS_FRACTION and not in PARENT_GENTYPES: MOSFiT standing in for an SED OpenUniverse never
+# published is an added source rather than a moved one, and it measured 0.19 mag off with a colour
+# trend. See NO SUBSTITUTIONS in the module docstring. Kept below, with its tests, for the same
+# reason as SN Iax.
 # OpenUniverse took its TDE from the observed SED of AT2019qiz, which is not published as a usable
 # template, so this is a declared substitution: the MOSFiT `tde` model of Guillochon et al. (2018),
 # the same model Hourglass uses. It is also the safest extrapolation in this module. Every other
@@ -472,10 +423,10 @@ OPENUNIVERSE_SOURCE_PREFIX = "ou-"
 # wavelength -- a featureless continuum standing in for a class defined by its narrow Balmer
 # emission. This also settles, without a judgement call, the question of whether to add SN IIb.
 SOURCES_BY_LABEL = {
-    # SN II split by subtype rather than pooled. Pooling them forced one luminosity function over
-    # the subtypes together, and its sigma of 1.61 mag had tails reaching M = -20.8 -- a
-    # superluminous supernova wearing a IIP label. The library separates them by its own SNTYPE
-    # (20 against 22); it is OpenUniverse's output catalogue that pools them into gentype 32.
+    # SN II split by subtype rather than pooled, because the library separates them by its own
+    # SNTYPE (20 against 22) and it is OpenUniverse's output catalogue that pools them into gentype
+    # 32. The split is what lets a parent of gentype 32 be resolved into the subtype its template
+    # says it is, which is the finer label the parquet carries in `izc_subtype`.
     "SN IIP": [
         "ou-ASASSN14jb",
         "ou-SN1987A",
@@ -532,13 +483,15 @@ SOURCES_BY_LABEL = {
     "SN Ia": [IA_SOURCE_NAME],
     # Not a registry name until `_sncosmo()` registers it; see IAX_SOURCE_NAME.
     "SN Iax": [IAX_SOURCE_NAME],
-    # Likewise, and a stand-in for the whole bank: `roman_light_curve` builds the drawn template.
+    # Likewise, and a stand-in for the whole bank: `build_model` builds the template the parent's
+    # own id selects.
     "TDE": [TDE_SOURCE_NAME],
 }
 
 # UNIFORM BY CLASS, ON PURPOSE. This is not OpenUniverse's mix and is not meant to be: it is a
-# training-set choice, the same kind of choice as the redshift distribution `draw_population` takes
-# from its caller, and a reader who takes it for a rate-based population will misread the sample.
+# training-set choice, the same kind of choice as the redshift distribution
+# `draw_population_from_parents` takes from its caller, and a reader who takes it for a rate-based
+# population will misread the sample.
 #
 # The reasoning. OpenUniverse's own mix is a strong function of redshift -- measured over the deep
 # early windows, TDE runs 7.9 % of the contaminants at z 0.02-0.1 and 0.2 % beyond z = 1, while
@@ -553,22 +506,28 @@ SOURCES_BY_LABEL = {
 # The SN II subtypes are split among themselves by volumetric fraction (Li et al. 2011) rather than
 # uniformly -- that split is a property of the class, not a choice about class balance, and
 # OpenUniverse pools all three into one label the classifier never sees separated.
-UNIFORM_CLASS_SHARE = 1.0 / 6.0
+UNIFORM_CLASS_SHARE = 1.0 / 4.0
 # Measured off OpenUniverse's own template set rather than taken from Li et al. (2011): of the 24
 # SN II templates it drew, 17 are SNTYPE 20 and 7 are SNTYPE 22. The volumetric split this used to
 # carry was a stand-in for exactly this number, and the number is now readable.
 SN_II_SUBTYPE_FRACTION = {"SN IIP": 17.0 / 24.0, "SN IIL": 7.0 / 24.0}
+#
+# SN Iax and TDE are NOT here, and that is the sample's scope rather than an omission: every class
+# it generates has to be one whose spectral model is OpenUniverse's own, so that the sample is a
+# redistribution of OpenUniverse's population in redshift and nothing else. See PARENT_GENTYPES in
+# `openuniverse_parents` for what each of the two would have cost, and the SN Iax and TDE blocks
+# above for the models themselves, which are kept but no longer drawn.
 CLASS_FRACTION = {
     "SN IIP": UNIFORM_CLASS_SHARE * SN_II_SUBTYPE_FRACTION["SN IIP"],
     "SN IIL": UNIFORM_CLASS_SHARE * SN_II_SUBTYPE_FRACTION["SN IIL"],
     "SN Ia": UNIFORM_CLASS_SHARE,
-    "SN Iax": UNIFORM_CLASS_SHARE,
     "SN Ic": UNIFORM_CLASS_SHARE,
     "SN Ib": UNIFORM_CLASS_SHARE,
-    "TDE": UNIFORM_CLASS_SHARE,
 }
 
-# The subtypes all map back to OpenUniverse gentype 32, the class they stand in for.
+# The subtypes all map back to OpenUniverse gentype 32, the class they stand in for. SN Iax (12)
+# and TDE (42) are kept here: the models still exist and a caller that re-enables one needs its
+# gentype, and nothing reads this map for a label CLASS_FRACTION does not carry.
 GENTYPE_BY_LABEL = {
     "SN Ia": 10,
     "SN Iax": 12,
@@ -579,136 +538,50 @@ GENTYPE_BY_LABEL = {
     "TDE": 42,
 }
 
-# Peak absolute magnitude, (median, sigma), in the normalisation band of
-# PEAK_ABSOLUTE_MAGNITUDE_BAND. These are handles on a model, not measured B magnitudes, and the
-# medians are anchored to the only thing that has to come out right: what Roman sees.
+# The one number a re-rendered object needs that its parent's catalogue row does not carry: the
+# brightness. It is measured per object -- see the module docstring -- and this is the reference the
+# measurement is expressed against.
 #
-# The provenance, and why it stopped being enough. The starting values were OpenUniverse's own --
-# salt2_mB - mu for SN Ia, peak_mag_g - mu below z = 0.3 for the core-collapse classes, Richardson
-# et al. (2014) for the SN II subtypes OpenUniverse pools into one label. Normalising a template in
-# rest-frame B fixes its brightness in B and leaves its brightness in Y106 to the template's own
-# B - Y colour, and that colour is precisely what these libraries do not agree on: OpenUniverse's
-# V19+HostXT core-collapse SEDs are redder in the near-infrared than the SNANA and Nugent templates
-# used here. Forward-modelled at OpenUniverse's own low-redshift SN Ic redshifts, the izc SN Ic
-# came out half a magnitude fainter in Y106 than OpenUniverse's -- a class-correlated brightness
-# offset inside the very band the classifier reads, in the sample that exists to remove one.
-#
-# So the medians below carry a calibration offset, measured rather than assumed, and
-# `scripts/calibrate_izc_brightness.py` is where it comes from. For each class, izc objects are
-# generated at redshifts resampled from OpenUniverse's own low-redshift objects of that class
-# (z < 0.45, deep tier), run through the same window builder and the same detection cut, and
-# summarised by the same statistic: the brightest Y106 mag_true of the window minus the distance
-# modulus. No K-correction is assumed anywhere, each template supplies its own colours, both sides
-# use `openuniverse_cosmology()`, and the two populations are compared after the same selection.
-#
-# Measured on 2500 izc objects a class, standard error of the median in parentheses:
-#
-#     class     OpenUniverse M(Y106)      izc      offset      applied?
-#     SN Ib           -17.612          -17.493   -0.119 (0.025)   yes
-#     SN Ic           -18.123          -18.082   -0.041 (0.035)   no, 1.2 sigma
-#     SN II           -17.246          -17.264   +0.018 (0.030)   no, 0.6 sigma
-#     SN Ia           -18.785          -18.930   +0.145 (0.009)   no, see below
-#     SN Iax          -16.476          -16.421   -0.055 (0.036)   no, see below
-#     TDE             -17.560          -17.122   -0.438 (0.043)   no, see below
-#
-# An offset below two standard errors of the median is not applied: it is one draw's worth of
-# noise, and tuning a class to it would make the sample agree with a sample rather than with a
-# model. SN Ic and SN II are converged by that rule; SN Ib is not and its median carries -0.119.
-#
-# Three classes are never adjusted here, whatever they measure, because their brightness is not a
-# free parameter -- it comes from a published model, and moving it would make the class agree by
-# construction instead of by model:
-#
-#   * SN Ia, whose normalisation is OpenUniverse's own salt2_mB and whose model is OpenUniverse's
-#     own SALT3. Its +0.145 (0.009) is the most significant residual in the table and it has a
-#     known cause, which is not a luminosity function: OpenUniverse standardises, and this module
-#     does not. See the SALT2_M0 block, where that is measured and where the fix is named.
-#   * SN Iax, whose M_V is read straight off the template bank OpenUniverse drew from. This class
-#     carried +0.587 mag in this module's comments, documented at length as an irreducible
-#     disagreement between Jha & Dai's luminosity function and what PLAsTiCC realised. TWO things
-#     turned out to be wrong with that, and they are separate.
-#
-#     First, the number. It is not reproducible. Run against the module as it stood at commit
-#     a591116 -- its own code, its own Planck18 -- this script measures +0.073 (0.040), not +0.587.
-#     The old figure came from an ad-hoc measurement that lived only in a comment, and whatever it
-#     did differently is not recoverable. That is the reason this script exists.
-#
-#     Second, the model. Replaying `Iax-model.ipynb` against its own inputs found four real bugs in
-#     the reproduction: the bank was resampled instead of replayed, the normalisation was at the
-#     light-curve peak instead of at phase zero, the base SED was built on the repacked file's 81
-#     phases instead of the notebook's 231 (which moved three index-addressed processing steps onto
-#     the wrong phases), and the pre-explosion suppression selected nothing. Measured one at a time
-#     they are worth +0.021, +0.025, +0.079 and, for the cosmology alongside them, +0.002 -- 0.128
-#     mag together, which is exactly the distance from +0.073 to the -0.055 (0.036) the class sits
-#     at now. The budget closes. Nothing was tuned to get there, and the class is now consistent
-#     with OpenUniverse's own at the 1.5 sigma level.
-#   * TDE, whose brightness is MOSFiT's physics. Its -0.438 (0.043) is the largest offset the
-#     sample now carries and it is a real one: OpenUniverse's TDE are the observed SED of
-#     AT2019qiz and this module's are a MOSFiT photosphere, so this is the size of the model
-#     substitution declared in the module docstring, measured. It belongs in the paper as such.
-#
-# The sigmas are NOT calibrated, only the medians. Measured the same way the izc scatter runs 0.99
-# to 1.70 against OpenUniverse's 0.33 to 1.19, and the two are not the same quantity: part of the
-# observed spread is the template-to-template colour scatter, which is already in the sample.
-PEAK_ABSOLUTE_MAGNITUDE = {
-    "SN Ia": (-19.404, 0.270),
-    "SN Ib": (-17.166, 1.17),
-    "SN Ic": (-17.502, 1.22),
-    "SN IIP": (-16.788, 0.97),
-    "SN IIL": (-17.968, 0.90),
-}
+# ITS VALUE IS ARBITRARY AND CANCELS. It normalises the render at the parent's redshift, from which
+# the offset is measured, and it normalises the render at the drawn redshift, to which the offset is
+# added back; the two renders are the same model and the reference enters both identically. -19.4 is
+# chosen only so that a printed `peak_absolute_magnitude` reads as a plausible absolute magnitude
+# for a supernova rather than as an offset from nothing.
+REFERENCE_ABSOLUTE_MAGNITUDE = -19.4
+# Rest-frame B on AB, for every class alike. The old per-class normalisation band existed because a
+# drawn luminosity function had to be applied in the band it was published in; nothing is drawn any
+# more, and the band a reference is applied in cancels with the reference.
+REFERENCE_MAGNITUDE_BAND = ("bessellb", "ab")
 
-# The band and magnitude system each luminosity function is normalised in. Everything here is
-# rest-frame B on the AB system except SN Iax, whose luminosity function Jha & Dai published in
-# rest-frame V on the Vega system; converting it would mean assuming a colour the model already
-# carries, so the drawn magnitude is applied in the band it was measured in.
-#
-# The B values are not on one photometric system either, and after the calibration above they do
-# not need to be: SN Ia inherits SALT2's mB, which is BD+17, and the SN II subtypes came from
-# Richardson et al. on Vega. Any such offset is inside the number that was anchored to M(Y106), and
-# what leaves this module is a Roman magnitude, never a B one.
-PEAK_ABSOLUTE_MAGNITUDE_BAND = {"SN Iax": ("bessellv", "vega")}
-
-# Shape and colour, from the OpenUniverse SN Ia population. The names are OpenUniverse's own: its
-# catalogue calls these columns `salt2_x1` and `salt2_c` even though its model is SALT3, which is
-# SNANA's naming for the parameterisation rather than for the model, and keeping the names makes
-# the two catalogues cross-referenceable.
-#
-# WHICH OpenUniverse population, which is the whole difficulty. These started as (0.152, 0.914) and
-# (-0.017, 0.075). That is a DETECTED subsample: the mean c reproduces a peak_mag_F < 25 cut to the
-# fourth decimal and the x1 falls between that cut and peak_mag_F < 26, and such a subsample has a
-# median redshift of 0.62 to 1.38 depending on where the cut goes. Detection at those redshifts is
-# Malmquist selection and it keeps the blue, broad end of the population. Applying it here imports
-# that selection into a redshift range which does not have one: below z = 0.45 all 5622 of
-# OpenUniverse's SNe Ia are detected, so generated and detected are the same population, and its
-# mean c is -0.0067 rather than -0.017 and its mean x1 -0.014 rather than +0.152.
-#
-# Left as they were, the izc SN Ia came out bluer, brighter and BROADER than OpenUniverse's own SN
-# Ia at the same redshift -- 0.031 mag of colour through beta = 3.1 and 0.025 mag of shape through
-# alpha = 0.15, both in one direction, in the class that is the largest single share of the sample.
-# Small, and exactly the species of class-correlated offset the module exists to remove.
-#
-# In `c` the dust is not separable and is not meant to be: SALT carries host extinction and
-# intrinsic colour in the same number, drawn by OpenUniverse from Scolnic & Kessler (2016). That is
-# why OpenUniverse records no AV for SN Ia (see the host extinction note below) and why attaching a
-# dust screen here would count the reddening twice.
-#
-# WHAT IS STILL MISSING HERE, measured and not yet applied. OpenUniverse does not draw a SN Ia
-# brightness independently of x1 and c the way this module does -- it standardises. Over all
-# 224 118 of its SNe Ia,
+# What OpenUniverse's SN Ia brightness IS, which makes that class the one place the measurement can
+# be checked against an exact answer rather than against another measurement. Over all 224 118 of
+# its SNe Ia,
 #
 #     salt2_mB + 0.15 * salt2_x1 - 3.1 * salt2_c - mu(z) = -19.363447 +- 0.000103 mag
 #
 # with alpha = 0.15 and beta = 3.1 for every object and gammaDM identically zero. That residual is
-# not a fit, it is an identity: OpenUniverse's SN Ia carry NO intrinsic scatter at all, and the
+# not a fit, it is an identity: OpenUniverse's SNe Ia carry NO intrinsic scatter at all, and the
 # 0.269 mag spread of their absolute mB is entirely the spread of x1 and c through that relation.
-# This module instead draws M_B from an independent Gaussian (PEAK_ABSOLUTE_MAGNITUDE["SN Ia"]),
-# which reproduces the width of the distribution and not its structure: the izc SN Ia have no
-# width-luminosity and no colour-luminosity relation, where OpenUniverse's have both exactly.
-# Reproducing it means setting `x0` per object from that identity instead of calling
-# `set_source_peakabsmag`, and it would replace the one remaining calibration this class needs.
-SALT2_X1 = (-0.014, 0.909)
-SALT2_C = (-0.0067, 0.0735)
+# So a SN Ia parent's absolute magnitude is known in closed form, and the offset measured off its
+# light curve can be compared against it. IT DOES NOT AGREE, and the disagreement is the reason to
+# measure rather than to compute. Over 60 SNe Ia of one healpix, measured minus (salt2_mB - mu):
+#
+#     median  +0.19 mag   -- a system offset, and an expected one: mB is a rest-frame B magnitude
+#                            on SALT's own system and the measurement is anchored in whatever
+#                            rest-frame region the Roman bands covered at the parent's redshift
+#     rms      0.21 mag   -- object to object, and NOT expected
+#
+# That scatter is uncorrelated with x1 (-0.13), with c (+0.07) and with redshift (+0.06), and a fit
+# in x1 and c removes none of it. It is also ACHROMATIC: within one object the bands agree to
+# 0.039 mag while between objects the offset moves by 0.21, so it is an amplitude and not a colour.
+# The catalogue identity above says these objects have no intrinsic scatter; their LIGHT CURVES say
+# they do. The likeliest reading is the intrinsic-scatter model SNANA applies to the flux and does
+# not fold back into the reported mB -- that is what such a model looks like, a per-object grey
+# offset of a tenth or two -- but nothing here proves it, and no other per-object quantity in the
+# catalogue (lens_dmu, mw_EBV, v_pec) is non-zero to explain it.
+#
+# Either way the sample inherits it, because the brightness is read off the light curve. A
+# generator that took the catalogue at its word would have produced SNe Ia with no scatter at all.
 SALT2_ALPHA = 0.15
 SALT2_BETA = 3.1
 SALT2_M0 = -19.363447  # at OPENUNIVERSE_H0; degenerate with it, see the cosmology block
@@ -718,9 +591,9 @@ SALT2_M0 = -19.363447  # at OPENUNIVERSE_H0; degenerate with it, see the cosmolo
 # from what OpenUniverse did becomes a class-correlated feature the classifier can learn and the
 # sky does not have. Audited against the 33 healpix catalogues, 1 352 231 objects:
 #
-#   * SN Ia (gentype 10) carry theirs inside SALT's `c`, so this module does too, through SALT2_C.
-#     AV is recorded as -9 because there is no separate screen to record, not because there is no
-#     dust.
+#   * SN Ia (gentype 10) carry theirs inside SALT's `c`, so this module does too, through the
+#     parent's own `salt2_c`. AV is recorded as -9 because there is no separate screen to record,
+#     not because there is no dust.
 #   * The core-collapse classes (21, 26, 32) carry NONE, and that is a bug of OpenUniverse's, not a
 #     property of the templates. Its own section 3.2.4, "Known issues": "For the core collapse
 #     models (SNII, SNIb, SNIc), the wavelength range was extended for the set of templates that
@@ -728,21 +601,23 @@ SALT2_M0 = -19.363447  # at OPENUNIVERSE_H0; degenerate with it, see the cosmolo
 #     the simulation." The "+HostXT" of `NON1ASED.V19_CC+HostXT_WAVEEXT` marks templates the host
 #     dust was taken OUT of; it was never put back. The catalogue agrees: AV = -9 and
 #     `template_index` is the only model parameter those rows carry. So no dust here either.
-#   * TDE (42) has it inside the luminosity function, which is also where the MOSFiT bank cut to
-#     van Velzen et al. (2021) carries it. Consistent, nothing to add.
+#   * TDE (42) records none, and the MOSFiT bank cut to van Velzen et al. (2021) carries whatever
+#     the observed population carries. Consistent, nothing to add.
 #   * SN Iax (12) is the one class OpenUniverse gives an explicit screen -- AV median 0.440, 84th
-#     percentile 1.027, RV 3.1 -- and this module now reproduces it; see IAX_HOST_AV_RANGE. It is
-#     the only dust this module applies to anything.
+#     percentile 1.027, RV 3.1 -- and the re-rendered object is given the screen ITS OWN parent
+#     was given. It is the only dust this module applies to anything.
 #
 # Milky Way extinction is applied by OpenUniverse in SkyCatalog rather than in SNANA, so the
 # catalogues carry `mw_extinction_applied = False` and mag_true is free of it for every class
 # alike. It creates no class structure and this module adds none.
+
 # Rest-frame days from MAXIMUM, not from the source's own phase zero. The two are not the same
-# thing across this library and the difference is class-correlated: the SNANA and SALT sources put
-# phase zero at B maximum, the Nugent ones -- the only sources SN IIL, SN IIn and part of Ib/Ic
-# have -- put it at the explosion, with maximum 11 to 17 d later. Sampled on the source's own
-# phases the Nugent classes would carry 20 fewer days of light curve after maximum than the others,
-# for no reason but the convention of the file they were read from.
+# thing across this library and the difference is class-correlated: SALT puts phase zero at B
+# maximum, the SN Iax base SED puts it at maximum, the MOSFiT bank is centred on peak luminosity,
+# and the core-collapse archive is on OpenUniverse's own `peak_mjd` axis, which for a SN II sits at
+# the start of the plateau rather than at a maximum. `peak_phase` resolves each of them to the same
+# axis, and it is the axis the parent's light curve is read on too, so both sides of the brightness
+# measurement span the same rest-frame phases.
 REST_FRAME_PHASES = np.arange(-20.0, 71.0, 1.0)
 # Observed-frame grid the spectrum is sampled on. The limits bracket R062 to F184 with room to
 # spare; the grid is intersected with each model's own validity range, because a source that does
@@ -1090,7 +965,6 @@ def iax_template(template_index):
 
 
 _TDE_TEMPLATES = None
-_TDE_PEAK_MAGNITUDES = None
 
 
 def _tde_templates():
@@ -1120,9 +994,9 @@ def tde_source(template_index):
     all of it is 79 MB and turns a 5 ms build into a lookup.
 
     Flux is the real thing -- pi B_lambda(T(t)) (R(t) / 10 pc)^2 -- rather than a shape to be
-    rescaled later, so the peak absolute magnitude of the source is the one MOSFiT's physics
-    implies and no luminosity function has to be assumed on top; see
-    `tde_peak_absolute_magnitudes`."""
+    rescaled later, so the source carries the brightness MOSFiT's physics implies. The sample does
+    not use it: a re-rendered TDE is normalised to its parent's own brightness like every other
+    class, and this bank supplies the colour and the shape of the light curve."""
     from astropy import units
     from astropy.modeling.models import BlackBody
 
@@ -1142,35 +1016,6 @@ def tde_source(template_index):
     radiance = np.where(warm[:, None], blackbody(wavelength[None, :]).value, 0.0)
     dilution = (radius[template_index] * units.cm / ten_parsec).decompose().value ** 2
     return sncosmo.TimeSeriesSource(phase, wavelength.value, np.pi * radiance * dilution[:, None])
-
-
-def tde_peak_absolute_magnitudes():
-    """Rest-frame B (AB) at peak for every template, from the model's own luminosity.
-
-    Built once and cached. This is what stands in for a luminosity function: MOSFiT already fixes
-    how bright each drawn TDE is, so drawing a magnitude on top would overwrite its physics with an
-    assumption."""
-    global _TDE_PEAK_MAGNITUDES
-    if _TDE_PEAK_MAGNITUDES is None:
-        magnitudes = []
-        for index in range(tde_template_count()):
-            # `Model.source_peakabsmag` divides by a distance modulus that is infinite at z = 0;
-            # the source's own peak magnitude is already absolute, because the flux is built at
-            # 10 pc.
-            magnitudes.append(tde_source(index).peakmag("bessellb", "ab"))
-        _TDE_PEAK_MAGNITUDES = np.array(magnitudes)
-    return _TDE_PEAK_MAGNITUDES
-
-
-def sample_iax_host_av(random_generator, size):
-    """Draw the host AV of a SN Iax from OpenUniverse's distribution; see IAX_HOST_AV_RANGE."""
-    grid = np.arange(IAX_HOST_AV_RANGE[0], IAX_HOST_AV_RANGE[1] + IAX_HOST_AV_STEP, IAX_HOST_AV_STEP)
-    density = np.exp(-grid / IAX_HOST_AV_TAU) + IAX_HOST_AV_WEIGHT * np.exp(
-        -(grid**2) / 2.0 / IAX_HOST_AV_SIGMA**2
-    )
-    cumulative = np.cumsum(density)
-    cumulative /= cumulative[-1]
-    return np.interp(random_generator.random(size), cumulative, grid)
 
 
 def iax_source(rise_time, decline_b, decline_r):
@@ -1219,87 +1064,417 @@ def iax_source(rise_time, decline_b, decline_r):
     return sncosmo.TimeSeriesSource(stretched, wavelength, flux * ramp(wavelength, stretched).T)
 
 
-def iax_phase_zero_offset(source):
-    """V(peak) - V(phase 0) of a warped SN Iax, in magnitudes.
-
-    The notebook normalises its templates so that rest-frame V at PHASE ZERO equals the drawn M_V
-    (`amplitudes = 10**(-0.4 * (Msamp - sedVmag))` with `sedVmag` measured at phase 0), and that is
-    the convention the SED files SNANA read were written in. `sncosmo.Model.set_source_peakabsmag`
-    normalises at the light-curve peak instead, which for the base SED sits at phase +3.7 and is
-    0.075 mag brighter -- a gray offset in every band, and one this module used to carry. Adding
-    this offset to the drawn magnitude before calling `set_source_peakabsmag` reproduces the
-    notebook's convention without reimplementing sncosmo's cosmology handling.
-
-    It is per template, not a constant: the dm15 warps move the peak, and over the bank it runs
-    from -0.07 to -0.27 mag."""
-    sncosmo = _sncosmo()
-    model = sncosmo.Model(source=source)
-    phases = np.arange(-10.0, 20.0, 0.1)
-    phases = phases[(phases >= source.minphase()) & (phases <= source.maxphase())]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        # A fast riser explodes after -10 d, and V is undefined on the phases before that.
-        magnitudes = model.bandmag("bessellv", "vega", phases)
-        return float(np.nanmin(magnitudes)) - float(model.bandmag("bessellv", "vega", 0.0))
+# --- The redshift the sample is generated at ----------------------------------------------------
+# The bins the deficit is counted in are the kilonova grid's own. `kn-kilonova-windows` puts its
+# kilonovae on 50 logarithmic redshifts between 0.01 and 1.0, so a kilonova histogram is 50 spikes
+# and any binning finer than the spacing between them measures the grid rather than the population.
+# The edges are the geometric midpoints of that grid, which is the coarsest binning that keeps one
+# grid point per bin.
+DEFICIT_REDSHIFT_LIMITS = (0.01, 1.0)
+DEFICIT_REDSHIFT_NODES = 50
 
 
-def draw_population(number, redshifts, random_generator):
-    """`number` contaminants: class, source, peak absolute magnitude, redshift, cadence parity.
+def deficit_bin_edges(limits=DEFICIT_REDSHIFT_LIMITS, nodes=DEFICIT_REDSHIFT_NODES):
+    """Bin edges around the kilonova redshift grid, one bin per grid point."""
+    grid = np.geomspace(limits[0], limits[1], nodes)
+    interior = np.sqrt(grid[1:] * grid[:-1])
+    return np.concatenate([[grid[0] ** 2 / interior[0]], interior, [grid[-1] ** 2 / interior[-1]]])
 
-    `redshifts` is the redshift of each object, drawn by the caller from whatever target
-    distribution the sample is meant to fill -- the deficit against the kilonova histogram, in the
-    intended use -- because the choice of that distribution is the whole point of the sample and
-    does not belong buried in here."""
-    labels = random_generator.choice(list(CLASS_FRACTION), size=number, p=list(CLASS_FRACTION.values()))
+
+def redshift_deficit(kilonova_redshifts_by_tier, contaminant_redshifts_by_tier, edges=None):
+    """(edges, per-bin count) of the contaminants the training set does not have.
+
+    THE STATISTIC. In each bin, how many contaminants a tier would need for the classifier to see
+    as many of them as it sees kilonovae: max(0, N_kilonova - N_contaminant). Below z = 0.45 that
+    number is essentially the whole kilonova histogram, because OpenUniverse's contaminants are
+    almost all above it -- which is the shortcut this sample exists to remove, counted.
+
+    THE MAXIMUM OVER TIERS, NOT THE SUM, and it changes the size of the sample by a factor of two.
+    The tiers are not disjoint populations: 717 863 of the 717 864 wide contaminants of
+    OpenUniverse are also deep ones, and one generated object serves both tiers because
+    `build_izc_windows` renders the light curve once and lets each tier observe the bands it
+    observes. So a bin needs as many objects as its hungriest tier asks for, not as many as both
+    ask for together.
+
+    Nothing is generated ABOVE the kilonova grid: there is no deficit there, and a contaminant at
+    z = 2 is one OpenUniverse already has."""
+    if edges is None:
+        edges = deficit_bin_edges()
+    deficits = []
+    for tier, kilonova_redshifts in kilonova_redshifts_by_tier.items():
+        kilonovae, _ = np.histogram(kilonova_redshifts, edges)
+        contaminants, _ = np.histogram(contaminant_redshifts_by_tier[tier], edges)
+        deficits.append(np.clip(kilonovae - contaminants, 0, None))
+    return edges, np.max(deficits, axis=0)
+
+
+def draw_redshifts_from_deficit(edges, deficit, random_generator, scale=1.0):
+    """One redshift per object the deficit asks for, uniform inside its own bin.
+
+    Uniform rather than at the bin's own grid point, because the kilonovae sit on a grid and the
+    contaminants they have to be indistinguishable from do not: a spike of izc objects at each of
+    50 redshifts would be a feature of the generation visible to the classifier in the redshift
+    token, and in the apparent magnitude even without it."""
+    counts = np.round(np.asarray(deficit, dtype=float) * scale).astype(int)
+    redshifts = [
+        random_generator.uniform(edges[index], edges[index + 1], count)
+        for index, count in enumerate(counts)
+        if count > 0
+    ]
+    return np.sort(np.concatenate(redshifts)) if redshifts else np.empty(0)
+
+
+@cache
+def _core_collapse_archive_order():
+    """(template names, labels) of the archive, in the order it was written.
+
+    The order is the whole content: `build_openuniverse_cc_templates.py` writes its templates in
+    ascending `template_index`, so the n-th entry here is the n-th smallest template index
+    OpenUniverse drew. That is what makes `core_collapse_source_by_template_index` a lookup rather
+    than a table someone typed."""
+    with np.load(OPENUNIVERSE_ARCHIVE_PATH) as archive:
+        return tuple(str(name) for name in archive["template_names"]), tuple(
+            str(label) for label in archive["labels"]
+        )
+
+
+def core_collapse_source_by_template_index(catalog):
+    """{template_index: (source name, label)}, derived from the catalogue and CHECKED against it.
+
+    The archive does not record which `template_index` each of its templates came from -- it
+    records their names -- so the mapping is recovered from the one thing that fixes it: both the
+    archive and the catalogue are in ascending template index. Nothing about that is assumed. The
+    catalogue's own gentype for every object of a template has to agree with the label the archive
+    carries for the template it lands on, over all 44 of them, or this raises: 21 is SN Ib, 26 is
+    SN Ic and 32 is the pool SN IIP and SN IIL are drawn from."""
+    core_collapse = catalog[catalog["gentype"].isin(openuniverse_parents.CORE_COLLAPSE_GENTYPES)]
+    indices = sorted(core_collapse["template_index"].unique())
+    names, labels = _core_collapse_archive_order()
+    if len(indices) != len(names):
+        raise ValueError(
+            f"the catalogue drew {len(indices)} core-collapse templates and the archive holds "
+            f"{len(names)}; the two cannot be matched by order"
+        )
+    gentypes = core_collapse.groupby("template_index")["gentype"].unique()
+    mapping = {}
+    for index, name, label in zip(indices, names, labels, strict=True):
+        drawn = sorted(int(one) for one in gentypes.loc[index])
+        if drawn != [GENTYPE_BY_LABEL[label]]:
+            raise ValueError(
+                f"template_index {index} maps to {name} ({label}, gentype "
+                f"{GENTYPE_BY_LABEL[label]}) but its objects carry gentype {drawn}"
+            )
+        mapping[int(index)] = (OPENUNIVERSE_SOURCE_PREFIX + name.replace("pycoco_", ""), label)
+    return mapping
+
+
+def draw_population_from_parents(catalog, redshifts, random_generator, source_by_template_index=None):
+    """One realization per entry of `redshifts`: a parent object, re-rendered at that redshift.
+
+    `catalog` is `openuniverse_parents.read_parent_catalog`'s table. The class is drawn first, from
+    CLASS_FRACTION, and the parent uniformly from the objects of that class -- WITH replacement,
+    because the classes are not equally numerous in OpenUniverse (3769 TDE against 683 446 SN II)
+    and equal shares here mean the rare ones are re-rendered many times over. Every copy of one
+    parent carries its `parent_key`, which is what keeps them together on one side of the split.
+
+    `redshifts` is drawn by the caller from whatever target distribution the sample is meant to
+    fill -- the deficit against the kilonova histogram, in the intended use -- because the choice of
+    that distribution is the whole point of the sample and does not belong buried in here.
+
+    The brightness is NOT set here: it is measured from the parent's own light curve, which lives in
+    a file this module never opens. `measure_brightness_offset` fills it in."""
+    if source_by_template_index is None:
+        source_by_template_index = core_collapse_source_by_template_index(catalog)
+
+    # Indexed once per class rather than filtered per object: the catalogue is 1.3 million rows and
+    # the sample draws from it a million times.
+    by_label = {}
+    for label in CLASS_FRACTION:
+        # The core-collapse classes are selected by TEMPLATE and not by the catalogue's label. Two
+        # of them have no label of their own -- OpenUniverse pools SN IIP and SN IIL into gentype
+        # 32 -- and for the two that do, the template is the stricter statement: it says which SED
+        # the object was drawn from, which is what is being re-rendered.
+        wanted = [
+            index
+            for index, (_, template_label) in source_by_template_index.items()
+            if template_label == label
+        ]
+        if wanted:
+            block = catalog[catalog["template_index"].isin(wanted)]
+        else:
+            block = catalog[catalog["label"] == label]
+        if block.empty:
+            raise ValueError(f"the parent catalogue holds no {label}")
+        by_label[label] = block.reset_index(drop=True)
+
+    labels = random_generator.choice(
+        list(CLASS_FRACTION), size=len(redshifts), p=list(CLASS_FRACTION.values())
+    )
     population = []
     for index, (label, redshift) in enumerate(zip(labels, redshifts, strict=True)):
-        tde_template_index = None
-        iax_template_index = None
-        if label == "SN Iax":
-            # No luminosity function is drawn either: a uniform index into the bank OpenUniverse
-            # shipped, and that row's own four parameters. See IAX_BANK_SIZE, and
-            # PEAK_ABSOLUTE_MAGNITUDE_BAND for why the band differs from every other class.
-            iax_template_index = int(random_generator.integers(IAX_BANK_SIZE))
-            peak_absolute_magnitude = iax_template(iax_template_index)[0]
-        elif label == "TDE":
-            # No luminosity function is drawn: MOSFiT already fixed how bright this TDE is, and the
-            # template bank carries that. Drawing a magnitude on top would replace its physics.
-            tde_template_index = int(random_generator.integers(tde_template_count()))
-            peak_absolute_magnitude = float(tde_peak_absolute_magnitudes()[tde_template_index])
-        else:
-            median, sigma = PEAK_ABSOLUTE_MAGNITUDE[label]
-            peak_absolute_magnitude = float(random_generator.normal(median, sigma))
-        realization = {
-            "index": index,
-            "label": str(label),
-            "source_name": str(random_generator.choice(SOURCES_BY_LABEL[label])),
-            "peak_absolute_magnitude": peak_absolute_magnitude,
-            "redshift": float(redshift),
-            # The two degrees of freedom of where the survey's visit grid falls on this transient,
-            # both uniform because in the sky the grid is fixed in absolute time and the explosion
-            # is not: the delay from the start of the model to the first visit, and the PARITY of
-            # that visit, which decides whether it carries the two blue non-anchor bands or the two
-            # red ones. Together they cover the full 10-day cycle of the band pattern. Without
-            # them every izc object would be sampled from the same phase of the cadence, and since
-            # the model's own start is set by the template library, that phase would be a function
-            # of the class -- the exact species of class-correlated artefact this module removes.
-            "cadence_parity": int(random_generator.integers(CADENCE_PARITY_PERIOD)),
-            "visit_phase_offset_days": float(random_generator.uniform(0.0, BASE_CADENCE_DAYS)),
-        }
-        if label == "SN Ia":
-            realization["salt2_x1"] = float(random_generator.normal(*SALT2_X1))
-            realization["salt2_c"] = float(random_generator.normal(*SALT2_C))
-        if tde_template_index is not None:
-            realization["tde_template_index"] = tde_template_index
-        if iax_template_index is not None:
-            _, rise_time, decline_b, decline_r = iax_template(iax_template_index)
-            realization["iax_template_index"] = iax_template_index
-            realization["iax_rise_time"] = rise_time
-            realization["iax_decline_b"] = decline_b
-            realization["iax_decline_r"] = decline_r
-            realization["host_av"] = float(sample_iax_host_av(random_generator, 1)[0])
-            realization["host_rv"] = IAX_HOST_RV
-        population.append(realization)
+        block = by_label[str(label)]
+        parent = block.iloc[int(random_generator.integers(len(block)))]
+        population.append(
+            realization_from_parent(
+                parent, index, float(redshift), source_by_template_index, random_generator
+            )
+        )
     return population
+
+
+def realization_from_parent(parent, index, redshift, source_by_template_index, random_generator):
+    """One OpenUniverse object, ready to be rendered at `redshift`.
+
+    `parent` is one row of `openuniverse_parents.read_parent_catalog`. Everything the release
+    records about the object is carried over; what the random generator is for is the placement of
+    the survey's visit grid, and, for a TDE, the one model a parent cannot supply."""
+    gentype = int(parent["gentype"])
+    core_collapse = gentype in openuniverse_parents.CORE_COLLAPSE_GENTYPES
+    # The catalogue's label for a core-collapse object is the pooled one -- OpenUniverse has no
+    # SN IIP and SN IIL, it has gentype 32 -- so the template it drew is what resolves the subtype.
+    source_name, label = (
+        source_by_template_index[int(parent["template_index"])]
+        if core_collapse
+        else (None, str(parent["label"]))
+    )
+    realization = {
+        "index": int(index),
+        "label": label,
+        "redshift": float(redshift),
+        "parent_key": str(parent["parent_key"]),
+        "parent_healpix": int(parent["healpix"]),
+        "parent_id": int(parent["id"]),
+        "parent_redshift": float(parent["redshift"]),
+        "parent_peak_mjd": float(parent["peak_mjd"]),
+        # Filled by `measure_brightness_offset`, from the parent's own light curve.
+        "peak_absolute_magnitude": np.nan,
+        "brightness_offset": np.nan,
+        "brightness_residual": np.nan,
+        "brightness_bands": 0,
+        # The two degrees of freedom of where the survey's visit grid falls on this transient, both
+        # uniform because in the sky the grid is fixed in absolute time and the explosion is not:
+        # the delay from the start of the model to the first visit, and the PARITY of that visit,
+        # which decides whether it carries the two blue non-anchor bands or the two red ones.
+        # Together they cover the full 10-day cycle of the band pattern. Without them every izc
+        # object would be sampled from the same phase of the cadence, and since the model's own
+        # start is set by the template, that phase would be a function of the class -- the exact
+        # species of class-correlated artefact this module removes.
+        "cadence_parity": int(random_generator.integers(CADENCE_PARITY_PERIOD)),
+        "visit_phase_offset_days": float(random_generator.uniform(0.0, BASE_CADENCE_DAYS)),
+    }
+    if core_collapse:
+        realization["source_name"] = source_name
+    elif label == "SN Ia":
+        realization["source_name"] = IA_SOURCE_NAME
+        realization["salt2_x1"] = float(parent["salt2_x1"])
+        realization["salt2_c"] = float(parent["salt2_c"])
+        realization["salt2_mB"] = float(parent["salt2_mB"])
+    elif label == "SN Iax":
+        realization["source_name"] = IAX_SOURCE_NAME
+        # OpenUniverse's `template_index` runs 1..919 over the bank the notebook drew and the bank
+        # is indexed from zero. See IAX_BANK_SIZE for how that mapping was verified.
+        iax_template_index = int(parent["template_index"]) - 1
+        _, rise_time, decline_b, decline_r = iax_template(iax_template_index)
+        realization["iax_template_index"] = iax_template_index
+        realization["iax_rise_time"] = rise_time
+        realization["iax_decline_b"] = decline_b
+        realization["iax_decline_r"] = decline_r
+    elif label == "TDE":
+        realization["source_name"] = TDE_SOURCE_NAME
+        # The one place a parent cannot supply the model: OpenUniverse's TDE is the observed SED of
+        # AT2019qiz and its `template_index` indexes a bank that was never published, so the MOSFiT
+        # template stands in. The parent still supplies the brightness and the group.
+        #
+        # Drawn from the PARENT'S OWN id rather than from the caller's generator, so that every
+        # re-rendering of one parent is the same TDE. Otherwise a parent re-rendered twenty times
+        # would be twenty different objects sharing one brightness, and the brightness measurement
+        # -- which renders the model at the parent's redshift -- could not be shared between them.
+        realization["tde_template_index"] = int(
+            np.random.default_rng(int(parent["id"])).integers(tde_template_count())
+        )
+    else:
+        raise ValueError(f"gentype {gentype} is not a class this module re-renders")
+    if np.isfinite(parent["host_av"]):
+        realization["host_av"] = float(parent["host_av"])
+        realization["host_rv"] = float(parent["host_rv"])
+    return realization
+
+
+def draw_class_population(catalog, labels, redshifts, random_generator, source_by_template_index=None):
+    """Realizations of ONE class, for the comparisons that fix the class and vary something else.
+
+    `labels` is one label or several. Several is how a comparison against a survey that does not
+    resolve the subtypes asks for a class: the Carnegie Supernova Project's type II release gives no
+    SN IIP / SN IIL split, so it asks for both and the parents come out in the proportion
+    OpenUniverse itself drew them, which is what the classifier sees.
+
+    `draw_population_from_parents` picks the class itself, which is the right interface for
+    generating a sample and the wrong one for a figure that puts the generator's SN Ib against an
+    observed SN Ib. Everything else is drawn the way the sample draws it -- the parent, its
+    template, its shape, its host screen.
+
+    The brightness is left AT THE REFERENCE, because measuring it needs the parent's light curve out
+    of a 16 GB hdf5 and the comparisons that use this difference it away: they compare a colour, a
+    decline rate or two sources against each other on the same object. A caller that needs the real
+    brightness runs `measure_population_brightness` over the result."""
+    if source_by_template_index is None:
+        source_by_template_index = core_collapse_source_by_template_index(catalog)
+    labels = {labels} if isinstance(labels, str) else set(labels)
+    wanted = [
+        index for index, (_, template_label) in source_by_template_index.items() if template_label in labels
+    ]
+    block = (
+        catalog[catalog["template_index"].isin(wanted)] if wanted else catalog[catalog["label"].isin(labels)]
+    )
+    if block.empty:
+        raise ValueError(f"the parent catalogue holds no {sorted(labels)}")
+    block = block.reset_index(drop=True)
+    population = []
+    for index, redshift in enumerate(redshifts):
+        parent = block.iloc[int(random_generator.integers(len(block)))]
+        realization = realization_from_parent(
+            parent, index, float(redshift), source_by_template_index, random_generator
+        )
+        population.append(apply_brightness_offset(realization, 0.0, float("nan"), 0))
+    return population
+
+
+def rendered_band_curves(realization, redshift, cosmology=None):
+    """{band: (phase, apparent AB magnitude)} of one realization's model at `redshift`.
+
+    The phase axis is the TEMPLATE'S OWN, which for every class here is also OpenUniverse's: its
+    `peak_mjd` is where the archive's phase grid was aligned, SALT puts phase zero at B maximum and
+    so does SNANA's peak for a SN Ia, and the SN Iax base SED is published with maximum at zero. So
+    this axis and `(mjd - peak_mjd) / (1 + z)` of the parent's own light curve are the same axis,
+    which is what makes an overlay of the two meaningful. `roman_light_curve` measures from B
+    maximum instead, because that is what the survey window needs.
+
+    A band the redshifted spectrum does not cover is absent; a phase the model has no flux at is
+    NaN. Unlike `roman_light_curve` this does not require every band at every phase, does not drop
+    colour discontinuities and does not enforce the model's flux floor: all three of those guard
+    against magnitudes that are spuriously FAINT, which is what the window cares about and what a
+    peak is unaffected by."""
+    model = build_model(dict(realization, redshift=float(redshift)), cosmology)
+
+    blue = max(model.minwave(), OBSERVED_WAVELENGTH_LIMITS[0])
+    red = min(model.maxwave(), OBSERVED_WAVELENGTH_LIMITS[1])
+    if red <= blue:
+        return {}
+    wavelength = _sampling_grid(blue, red, OBSERVED_WAVELENGTH_STEP)
+
+    source = model.source
+    phases = peak_phase(realization) + REST_FRAME_PHASES
+    phases = phases[(phases >= source.minphase()) & (phases <= source.maxphase())]
+    rows = []
+    for phase in phases:
+        flux = np.clip(model.flux(phase * (1.0 + redshift), wavelength), 0.0, None)
+        if flux.max() < PHOTOMETRY_FLOOR:
+            rows.append(dict.fromkeys(ALL_ROMAN_BANDS, np.nan))
+            continue
+        rows.append(spectrum_to_roman_magnitudes(wavelength, flux))
+    curves = {}
+    for band in ALL_ROMAN_BANDS:
+        magnitudes = np.array([row[band] for row in rows])
+        if np.isfinite(magnitudes).any():
+            curves[band] = (phases, magnitudes)
+    return curves
+
+
+def rendered_peak_magnitudes(realization, redshift, cosmology=None):
+    """{band: brightest AB magnitude} of one realization's model at `redshift`, band by band.
+
+    The counterpart of `openuniverse_parents.parent_peak_magnitudes`, over the same rest-frame phase
+    window and in the same bands. A band the redshifted spectrum does not cover is absent, which is
+    how the measurement handles a parent at z = 2.9 whose blue bands sample rest-frame ultraviolet
+    no template reaches."""
+    peaks = {}
+    for band, (_, magnitudes) in rendered_band_curves(realization, redshift, cosmology).items():
+        with np.errstate(invalid="ignore"):
+            peak = np.nanmin(magnitudes)
+        if np.isfinite(peak):
+            peaks[band] = float(peak)
+    return peaks
+
+
+# WHERE THE BRIGHTNESS IS MEASURED, in the REST frame of the parent. A band is only used if its
+# pivot wavelength, de-redshifted by the parent's own redshift, lands inside this window. Both
+# edges are where a template stops being a measurement: below 3500 A the archive's own blue edge is
+# at 3000 A and SALT3's ultraviolet is the least constrained part of it, and above 10000 A every
+# core-collapse template is `_WAVEEXT`, the extension rather than the pycoco base.
+#
+# THIS IS MEASURED, NOT ASSUMED. Per band, per object, against the median of that object's own
+# bands -- so a constant brightness error cancels and only the band-to-band disagreement is left --
+# over 30 parents a class of one healpix, in magnitudes:
+#
+#     rest        SN Ia          SN Iax         TDE
+#     ~ A       median  rms    median  rms    median  rms
+#      3000     +0.000 0.358   -0.024 0.095   +0.289 0.180
+#      4000     +0.004 0.156   -0.066 0.091   +0.245 0.102
+#      5000     +0.000 0.083   +0.031 0.088   +0.105 0.112
+#      6000     +0.000 0.150   +0.010 0.070   +0.059 0.086
+#      8000     -0.005 0.043   +0.087 0.089   -0.030 0.073
+#     10000     +0.017 0.019   +0.126 0.024   -0.076 0.022
+#
+# The SN Ia column is the reason for the blue edge: the median is zero at every wavelength -- there
+# is no colour bias, both models are SALT3 -- but the per-object scatter is eight times larger in
+# the ultraviolet than in the near-infrared, so a parent at z = 2 whose only usable bands are blue
+# gets a noisy brightness for no reason but where its bands landed. The SN Iax and TDE columns are
+# the other thing this cannot fix and does not try to: a monotonic colour trend, which is the
+# reimplementation and the substitution showing, and which is what `brightness_residual` reports.
+#
+# The window is a preference and not a requirement. A parent with no band inside it falls back to
+# every band both sides cover, because a noisy brightness is still a brightness and dropping the
+# object would select on redshift.
+BRIGHTNESS_REST_WAVELENGTH_LIMITS = (3500.0, 10000.0)
+
+
+@cache
+def _band_pivot_wavelengths():
+    """{band: photon-weighted pivot wavelength in A}, the one number that says where a band sits."""
+    from kilonova.photometry.roman_noise import roman_bandpasses
+
+    pivots = {}
+    for band, bandpass in roman_bandpasses().items():
+        # galsim keeps its bandpasses in nm.
+        wavelength = np.asarray(bandpass.wave_list, dtype=float) * 10.0
+        throughput = np.array([bandpass(one) for one in bandpass.wave_list], dtype=float)
+        pivots[band] = float(
+            np.trapezoid(throughput * wavelength, wavelength) / np.trapezoid(throughput, wavelength)
+        )
+    return pivots
+
+
+def measure_brightness_offset(realization, parent_peaks, cosmology=None):
+    """The parent's own brightness, as an offset from REFERENCE_ABSOLUTE_MAGNITUDE.
+
+    `parent_peaks` is `openuniverse_parents.parent_peak_magnitudes` for the same object. Returns
+    (offset, band-to-band spread, number of bands); the offset is NaN when no band is common to
+    both sides, which is a parent this sample cannot re-render.
+
+    The spread adjusts nothing. It is the disagreement between the parent's own photometry and this
+    pipeline's rendering of the parent's own model, band by band, which for the classes whose model
+    is not a substitution is a measurement of the pipeline and for the others is the size of the
+    substitution."""
+    at_reference = dict(realization, peak_absolute_magnitude=REFERENCE_ABSOLUTE_MAGNITUDE)
+    rendered = rendered_peak_magnitudes(at_reference, realization["parent_redshift"], cosmology)
+    common = [band for band in ALL_ROMAN_BANDS if band in parent_peaks and band in rendered]
+    pivots = _band_pivot_wavelengths()
+    blue, red = BRIGHTNESS_REST_WAVELENGTH_LIMITS
+    inside = [band for band in common if blue <= pivots[band] / (1.0 + realization["parent_redshift"]) <= red]
+    differences = [parent_peaks[band] - rendered[band] for band in (inside or common)]
+    if not differences:
+        return float("nan"), float("nan"), 0
+    spread = float(max(differences) - min(differences)) if len(differences) > 1 else float("nan")
+    return float(np.median(differences)), spread, len(differences)
+
+
+def apply_brightness_offset(realization, offset, spread, bands):
+    """Write a measured brightness into a realization, in place, and return it."""
+    realization["brightness_offset"] = float(offset)
+    realization["brightness_residual"] = float(spread)
+    realization["brightness_bands"] = int(bands)
+    realization["peak_absolute_magnitude"] = REFERENCE_ABSOLUTE_MAGNITUDE + float(offset)
+    return realization
 
 
 def build_model(realization, cosmology=None, **model_keywords):
@@ -1310,7 +1485,8 @@ def build_model(realization, cosmology=None, **model_keywords):
     against the Carnegie Supernova Project photometry (`scripts/compare_csp_lightcurves.py`)
     synthesizes it through the CSP natural system. `model_keywords` reaches `sncosmo.Model`
     untouched, which is how that script attaches a Milky Way dust screen; nothing in the generated
-    sample uses it, and the module itself still applies no extinction of any kind."""
+    sample uses it, and the only extinction the sample itself carries is the host screen its parent
+    was given."""
     sncosmo = _sncosmo()
     if cosmology is None:
         cosmology = openuniverse_cosmology()
@@ -1336,13 +1512,9 @@ def build_model(realization, cosmology=None, **model_keywords):
         model.set(hostr_v=realization["host_rv"], hostebv=realization["host_av"] / realization["host_rv"])
     if "salt2_x1" in realization:
         model.set(x1=realization["salt2_x1"], c=realization["salt2_c"])
-    band, magnitude_system = PEAK_ABSOLUTE_MAGNITUDE_BAND.get(realization["label"], ("bessellb", "ab"))
+    band, magnitude_system = REFERENCE_MAGNITUDE_BAND
     magnitude = realization["peak_absolute_magnitude"]
-    if realization["label"] == "SN Iax":
-        # The bank's M_V is rest-frame V at PHASE ZERO, not at the light-curve peak; see
-        # `iax_phase_zero_offset`.
-        magnitude = magnitude + iax_phase_zero_offset(source)
-    # Set on the bare source, so the drawn absolute magnitude means the same thing whether or not
+    # Set on the bare source, so the measured absolute magnitude means the same thing whether or not
     # the caller attached an effect: a dust screen must dim what leaves the model, not be undone by
     # renormalising through it.
     model.set_source_peakabsmag(magnitude, band, magnitude_system, cosmo=cosmology)
@@ -1555,10 +1727,12 @@ def _add_one_window(realization, curves, constants, bright_limit, windows, rejec
     base_epochs = np.arange(
         days.min() + realization["visit_phase_offset_days"], days.max() + 1e-9, BASE_CADENCE_DAYS
     )
-    object_id = (
-        f"izc_{realization['index']:08d}_{realization['label'].replace(' ', '')}"
-        f"_{realization['redshift']:.4f}"
-    )
+    # The parent comes FIRST and unmodified, because the split reads its group off this string:
+    # `training/openuniverse_data.py` maps an izc id to `snana_{healpix}_{object}`, which is the
+    # same group key the parent itself carries in the OpenUniverse windows. Every re-rendering of
+    # one parent, and the parent, land on one side of the split. The redshift and the running index
+    # follow to make the id unique -- one parent is re-rendered many times.
+    object_id = f"izc_{realization['parent_key']}_{realization['redshift']:.4f}_{realization['index']:08d}"
     window = build_window_from_model(
         object_id,
         model,
@@ -1580,6 +1754,13 @@ def _add_one_window(realization, curves, constants, bright_limit, windows, rejec
     # its own column instead of being smuggled into `label`.
     window["label"] = GENTYPE_LABEL[GENTYPE_BY_LABEL[realization["label"]]]
     window["izc_subtype"] = realization["label"]
+    # What this object was re-rendered from, and how well the rendering reproduced it. None of the
+    # four is read by the training path; they are what makes a generated window traceable back to
+    # the OpenUniverse object it came from.
+    window["parent_key"] = realization["parent_key"]
+    window["parent_z_CMB"] = realization["parent_redshift"]
+    window["brightness_offset"] = realization["brightness_offset"]
+    window["brightness_residual"] = realization["brightness_residual"]
     observed = window[window["observed"]]
     saturated = observed["mag_true"] < observed["band"].map(bright_limit)
     if saturated.any():
@@ -1606,3 +1787,202 @@ def saturation_magnitude(tier):
         rate = counts_at_saturation / exposure / collecting_area_cm2()
         magnitudes[band] = float(constants["zeropoint"][band] - 2.5 * np.log10(rate))
     return magnitudes
+
+
+# --- Running the sample -------------------------------------------------------------------------
+# One task per healpix, because that is what the brightness measurement costs: it reads the parent's
+# light curve out of a 16 GB hdf5, and grouping the population by the file its parents live in opens
+# each of the 33 files once instead of once per object. The rendering does not care, so it rides
+# along in the same task, and what crosses the process boundary is the path of a parquet shard
+# rather than the windows themselves: 670 000 objects are 27 million rows over the two tiers, which
+# is more than this machine can hold as DataFrames while it waits for the last worker.
+
+
+def measure_population_brightness(population, hdf5_path, cosmology=None):
+    """Fill in the brightness of every realization whose parent lives in one hdf5, in place.
+
+    Returns the number of realizations left without one: a parent whose light curve shares no band
+    with the rendering of its own model, which cannot be re-rendered and is dropped by the caller.
+
+    The measurement is cached per parent. One parent is re-rendered many times -- the rare classes
+    tens of times -- and every copy of it has the same model at the same parent redshift, so the
+    render that costs the measurement is done once."""
+    import h5py
+
+    unmeasured = 0
+    measured_by_parent = {}
+    with h5py.File(hdf5_path, "r") as handle:
+        for realization in population:
+            parent_id = realization["parent_id"]
+            if parent_id not in measured_by_parent:
+                group = handle.get(str(parent_id))
+                if group is None:
+                    measured_by_parent[parent_id] = (float("nan"), float("nan"), 0)
+                else:
+                    peaks = openuniverse_parents.parent_peak_magnitudes(
+                        group,
+                        realization["parent_redshift"],
+                        realization["parent_peak_mjd"],
+                        ALL_ROMAN_BANDS,
+                    )
+                    measured_by_parent[parent_id] = measure_brightness_offset(realization, peaks, cosmology)
+            offset, spread, bands = measured_by_parent[parent_id]
+            if bands == 0:
+                unmeasured += 1
+                continue
+            apply_brightness_offset(realization, offset, spread, bands)
+    return unmeasured
+
+
+def run_izc_healpix(healpix, population, source_directory, tiers, shard_directory=None, cosmology=None):
+    """Measure, render and window every object of one healpix.
+
+    Returns ({tier: parquet shard path}, summary) when `shard_directory` is given and
+    ({tier: windows}, summary) when it is not. The shards are how the full run survives its own
+    size: 670 000 objects are 27 million rows over the two tiers, and holding them as DataFrames
+    until the end needs more memory than this machine has. Each task writes its own and the parent
+    streams them together."""
+    hdf5_path = Path(source_directory) / f"snana_{healpix}.hdf5"
+    if hdf5_path.stat().st_size == 0:
+        # A cloud-storage placeholder reads as an empty file rather than as an error, which would
+        # silently produce a sample with no brightness at all. See docs/generate_datasets.md.
+        raise SystemExit(f"{hdf5_path} is empty; mark it available offline before running")
+    unmeasured = measure_population_brightness(population, hdf5_path, cosmology)
+    measurable = [one for one in population if one["brightness_bands"] > 0]
+    results = build_izc_windows(measurable, tiers, cosmology)
+
+    summary = {"objects": len(population), "unmeasured": unmeasured}
+    output = {}
+    for tier in tiers:
+        windows, rejected = results[tier]
+        summary[tier] = dict(rejected, windows=int(windows["object_id"].nunique()) if len(windows) else 0)
+        if shard_directory is None:
+            output[tier] = windows
+            continue
+        if not len(windows):
+            output[tier] = None
+            continue
+        shard = Path(shard_directory) / f"izc_windows_{tier}_{healpix}.parquet"
+        windows.to_parquet(shard, index=False)
+        output[tier] = shard
+    return output, summary
+
+
+_IZC_WORKER_STATE = {}
+
+
+def _izc_worker_initializer(source_directory, tiers, shard_directory):
+    _IZC_WORKER_STATE["source_directory"] = source_directory
+    _IZC_WORKER_STATE["tiers"] = list(tiers)
+    _IZC_WORKER_STATE["shard_directory"] = shard_directory
+    register_sources()
+
+
+def _izc_healpix_task(work_item):
+    healpix, population = work_item
+    shards, summary = run_izc_healpix(
+        healpix,
+        population,
+        _IZC_WORKER_STATE["source_directory"],
+        _IZC_WORKER_STATE["tiers"],
+        _IZC_WORKER_STATE["shard_directory"],
+    )
+    return healpix, shards, summary
+
+
+def run_izc_tiers(population, source_directory, tiers, output_paths, workers=1, shard_directory=None):
+    """Generate the whole sample and write one parquet per tier. Returns (totals, per-tier summary).
+
+    Ordered `imap` over the healpix in sorted order, not `imap_unordered`, so the row order of the
+    parquet is reproducible between runs."""
+    import logging
+    import multiprocessing
+    import os
+    import shutil
+    import time
+
+    import pyarrow.parquet as pq
+
+    logger = logging.getLogger(__name__)
+    by_healpix = {}
+    for realization in population:
+        by_healpix.setdefault(realization["parent_healpix"], []).append(realization)
+    work_items = sorted(by_healpix.items())
+
+    if shard_directory is None:
+        shard_directory = Path(next(iter(output_paths.values()))).parent / ".izc_shards"
+    shard_directory = Path(shard_directory)
+    shard_directory.mkdir(parents=True, exist_ok=True)
+
+    shards = {tier: [] for tier in tiers}
+    totals = {"objects": 0, "unmeasured": 0}
+    per_tier = {tier: {"windows": 0, "coverage": 0, "undetected": 0, "saturated_kept": 0} for tier in tiers}
+    start = time.time()
+
+    if workers > 1:
+        # Each worker single-threaded: 6 processes x N BLAS threads saturates the machine.
+        for variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+            os.environ.setdefault(variable, "1")
+        context = multiprocessing.get_context("spawn")
+        pool = context.Pool(
+            workers,
+            initializer=_izc_worker_initializer,
+            initargs=(str(source_directory), tuple(tiers), str(shard_directory)),
+        )
+        stream = pool.imap(_izc_healpix_task, work_items, chunksize=1)
+    else:
+        _izc_worker_initializer(str(source_directory), tiers, str(shard_directory))
+        pool = None
+        stream = (_izc_healpix_task(item) for item in work_items)
+
+    try:
+        for counter, (healpix, written, summary) in enumerate(stream, start=1):
+            totals["objects"] += summary["objects"]
+            totals["unmeasured"] += summary["unmeasured"]
+            for tier in tiers:
+                if written[tier] is not None:
+                    shards[tier].append(written[tier])
+                for key, value in summary[tier].items():
+                    per_tier[tier][key] += value
+            elapsed = time.time() - start
+            rate = totals["objects"] / elapsed if elapsed else 0.0
+            logger.info(
+                "[izc] healpix %d (%d/%d)  objects=%d  unmeasured=%d  %s  %.1f obj/s  ETA %.0f min",
+                healpix,
+                counter,
+                len(work_items),
+                totals["objects"],
+                totals["unmeasured"],
+                "  ".join(f"{tier}={per_tier[tier]['windows']}" for tier in tiers),
+                rate,
+                (len(population) - totals["objects"]) / rate / 60.0 if rate else 0.0,
+            )
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
+
+    for tier in tiers:
+        if not shards[tier]:
+            logger.warning("[%s] no izc object reached a detection; nothing written", tier)
+            continue
+        writer = None
+        rows = 0
+        for shard in shards[tier]:
+            table = pq.read_table(shard)
+            rows += table.num_rows
+            if writer is None:
+                writer = pq.ParquetWriter(output_paths[tier], table.schema)
+            writer.write_table(table)
+        writer.close()
+        logger.info(
+            "[%s] DONE windows=%d rows=%d dropped: no coverage=%d undetected=%d -> %s",
+            tier,
+            per_tier[tier]["windows"],
+            rows,
+            per_tier[tier]["coverage"],
+            per_tier[tier]["undetected"],
+            output_paths[tier],
+        )
+    shutil.rmtree(shard_directory, ignore_errors=True)
+    return totals, per_tier

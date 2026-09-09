@@ -11,6 +11,8 @@ entrenamiento.
 |---|---|---|
 | `early_windows_{deep,wide}.parquet` | contaminantes OpenUniverse (SN, TDE, SLSN, PISN) | `kn-run-openuniverse`, 2026-07-28 |
 | `kn_windows_{deep,wide}.parquet` | kilonovas LANL inyectadas | `kn-kilonova-windows`, 2026-07-30 (2ª corrida del día: paridad de cadencia) |
+| `izc_windows_{deep,wide}.parquet` | contaminantes de OpenUniverse **re-renderizados** al z que al survey le falta | `kn-izc-windows`, 2026-09-09 |
+| `snana_catalogs/` | los 33 catalogos del release (135 MB, sin light curves) | descargados; entrada de `kn-izc-windows`, no producto |
 | `openuniverse_tokens.npz` | caché de tokens (`group_key` v2, split por transiente) | `training/openuniverse_data.py`, 2026-08-02 |
 | `openuniverse_tokens_test.npz` | recorte solo-test de la anterior | `training/run_evaluation_test_only.py`, 2026-08-02 |
 
@@ -26,6 +28,12 @@ versionan igual**: bajándolos, el split evaluado es el mismo bit a bit en vez d
   Dropbox haya terminado de replicar el remote DVC. Es una excepción consciente a la regla de
   tamaño de `CLAUDE.md`: 60 MB pasa el umbral de aviso de GitHub (50 MB), aunque no el de rechazo
   (100 MB).
+
+Los `izc_windows_*` son los mismos objetos de `early_windows_*` puestos a otra distancia: cada uno
+hereda de un objeto padre su clase, su plantilla, su forma, su polvo y su brillo -- medido de la
+curva completa del padre en el hdf5 --, y solo el redshift se sortea. El `object_id` lleva el
+`object_id` del padre adentro, que es como `training/openuniverse_data.py` los mete en el mismo
+grupo del split. Ver el docstring de `kilonova.simulation.intermediate_z_contaminants`.
 
 Las magnitudes de los contaminantes vienen del snana de OpenUniverse, que ya trae la
 K-corrección y todo lo demás incorporado; este pipeline solo les aplica la receta de ruido y la
