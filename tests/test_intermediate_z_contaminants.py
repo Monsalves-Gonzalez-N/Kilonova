@@ -19,21 +19,35 @@ from kilonova.simulation.intermediate_z_contaminants import (
     ALL_ROMAN_BANDS,
     CLASS_FRACTION,
     GENTYPE_BY_LABEL,
+    IA_BASE_SOURCE_NAME,
+    IA_PAD_WAVELENGTH,
+    IA_SOURCE_NAME,
+    IAX_BANK_SIZE,
+    IAX_HOST_AV_RANGE,
+    IAX_HOST_RV,
     IZC_GENTYPE_OFFSET,
+    MAXIMUM_COLOUR_RATE,
     MODEL_FLUX_FLOOR_MAGNITUDE,
-    PREFERRED_IA_MINIMUM_REDSHIFT,
-    PREFERRED_IA_SOURCE,
+    PEAK_ABSOLUTE_MAGNITUDE,
+    REST_FRAME_PHASES,
     SN_II_SUBTYPE_FRACTION,
     SOURCES_BY_LABEL,
     UNIFORM_CLASS_SHARE,
+    _iax_bank,
+    _iax_base_sed,
+    _sampling_grid,
     _tde_templates,
     build_izc_windows,
+    build_model,
+    defective_near_infrared_extension,
     draw_population,
-    iax_shape_parameters,
+    iax_phase_zero_offset,
     iax_source,
+    iax_template,
+    openuniverse_cosmology,
     register_sources,
     roman_light_curve,
-    sample_iax_absolute_magnitude,
+    sample_iax_host_av,
     saturation_magnitude,
     tde_peak_absolute_magnitudes,
     tde_template_count,
@@ -68,8 +82,8 @@ def test_every_generated_class_is_fully_specified():
     """A class that can be drawn must have sources, a luminosity function and a gentype.
 
     The luminosity function is checked by drawing from it rather than by membership in
-    PEAK_ABSOLUTE_MAGNITUDE: SN Iax does not appear there, because Jha & Dai's is a linear law with
-    Gaussian rolloffs and no (median, sigma) exists to put in that table."""
+    PEAK_ABSOLUTE_MAGNITUDE: neither SN Iax nor TDE appears there, because neither draws a
+    magnitude -- one reads it off the template bank and the other off MOSFiT's physics."""
     random_generator = np.random.default_rng(0)
     for label in CLASS_FRACTION:
         assert SOURCES_BY_LABEL.get(label), label
@@ -83,18 +97,59 @@ def test_every_generated_class_is_fully_specified():
         assert np.isfinite(realization["peak_absolute_magnitude"]), realization["label"]
 
 
-def test_iax_luminosity_function_matches_jha_and_dai():
-    """The published law spans M_V = -13 to -18 with rolloffs, not a Gaussian.
+def test_iax_bank_replays_the_published_templates():
+    """The bank is the notebook's own, not a resample of the same laws.
 
-    `Iax-model.ipynb` prints "fraction brighter than -17.5" for its own 1001-object draw; the
-    distribution here has to reproduce that shape, not merely be finite."""
-    random_generator = np.random.default_rng(4)
-    magnitudes = sample_iax_absolute_magnitude(random_generator, 200000)
-    assert -20.0 <= magnitudes.min() and magnitudes.max() <= -11.0
-    # Iax-model.ipynb prints 0.2318 for this fraction from a 1001-object draw.
-    assert 0.20 < np.mean(magnitudes < -17.5) < 0.27
-    assert -17.0 < np.median(magnitudes) < -15.0
-    assert np.mean(magnitudes > -14.0) > np.mean(magnitudes < -18.0)
+    `Iax-model.ipynb` seeds `np.random.seed(4)` and prints "fraction brighter than -17.5: 0.2318"
+    for its 1001-object draw. Reproducing that number to the fourth decimal is what says the replay
+    is on the notebook's random stream -- the luminosity function alone would only reproduce it to
+    the sampling error of 1001 draws, which is 1.3 %."""
+    absolute_v, rise_time, decline_b, decline_r = _iax_bank()
+    assert len(absolute_v) == IAX_BANK_SIZE == 919
+    # Over the notebook's full 1001 draws; the bank keeps the 919 OpenUniverse shipped.
+    assert -20.0 <= absolute_v.min() and absolute_v.max() <= -11.0
+    assert np.median(absolute_v) == pytest.approx(-15.9815, abs=1e-3)
+    assert rise_time.min() > 0.0
+    assert (decline_r >= 0.0).all()
+    # The width-luminosity relations, which are the whole content of the model: a faint SN Iax
+    # rises faster and declines faster.
+    faint = absolute_v > -15.0
+    bright = absolute_v < -17.0
+    assert rise_time[bright].mean() > rise_time[faint].mean()
+    assert decline_b[bright].mean() < decline_b[faint].mean()
+    assert decline_r[bright].mean() < decline_r[faint].mean()
+
+
+def test_iax_template_index_matches_openuniverse():
+    """Row 0 of the replay is `template_index` 1 of the OpenUniverse catalogue.
+
+    Verified against the catalogue itself rather than asserted: the dust-corrected peak absolute
+    LSST-g magnitude of the 1923 OpenUniverse SNe Iax below z = 0.45 tracks the replayed M_V with
+    slope +0.990 and correlation +0.983, where the same bank shuffled gives -0.022. These two rows
+    are the endpoints of that check."""
+    assert iax_template(0)[0] == pytest.approx(-12.8081, abs=1e-3)
+    assert iax_template(918)[0] == pytest.approx(-13.7112, abs=1e-3)
+
+
+def test_iax_is_normalised_at_phase_zero_not_at_peak():
+    """The notebook sets V(phase 0) = M_V; sncosmo's own helper would set V(peak) = M_V.
+
+    The two differ by 0.075 mag for the base SED and by up to 0.18 over the bank, gray in every
+    band, and this module carried that offset until the convention was measured off cell 14."""
+    sncosmo = pytest.importorskip("sncosmo")
+    from astropy.cosmology import Planck18
+
+    absolute_v, rise_time, decline_b, decline_r = _iax_bank()
+    for row in (0, 400, 918):
+        source = iax_source(rise_time[row], decline_b[row], decline_r[row])
+        offset = iax_phase_zero_offset(source)
+        assert -0.30 < offset < 0.0, row
+        model = sncosmo.Model(source=source)
+        model.set(z=0.1)
+        model.set_source_peakabsmag(absolute_v[row] + offset, "bessellv", "vega", cosmo=Planck18)
+        # What the convention claims: rest-frame V at phase zero is the bank's own M_V.
+        phase_zero = model.source.bandmag("bessellv", "vega", 0.0) - Planck18.distmod(0.1).value
+        assert phase_zero == pytest.approx(absolute_v[row], abs=1e-3), row
 
 
 # (rise time, dm15B, dm15R) asked for, and the dm15B/dm15R Iax-model.ipynb reports after warping.
@@ -125,16 +180,6 @@ def test_iax_warp_reproduces_the_published_model(rise_time, decline_b, decline_r
     measured_r = model.bandmag("bessellr", "vega", 15.0) - model.bandmag("bessellr", "vega", 0.0)
     assert measured_b == pytest.approx(expected_b, abs=1e-3)
     assert measured_r == pytest.approx(expected_r, abs=1e-3)
-
-
-def test_iax_shape_parameters_follow_the_width_luminosity_relation():
-    """A faint SN Iax rises faster and declines faster; that is the whole content of the model."""
-    random_generator = np.random.default_rng(1)
-    bright = np.array([iax_shape_parameters(-18.0, random_generator) for _ in range(400)])
-    faint = np.array([iax_shape_parameters(-14.0, random_generator) for _ in range(400)])
-    assert bright[:, 0].mean() > faint[:, 0].mean()  # rise time
-    assert bright[:, 1].mean() < faint[:, 1].mean()  # dm15(B)
-    assert bright[:, 2].mean() < faint[:, 2].mean()  # dm15(R)
 
 
 def test_izc_gentypes_stay_separable_from_the_openuniverse_ones():
@@ -269,33 +314,52 @@ def test_izc_windows_carry_a_resolvable_label():
     assert set(windows["izc_subtype"]) <= set(CLASS_FRACTION)
 
 
-def test_type_ia_use_salt3_nir_wherever_it_covers_f184():
-    """`salt3-nir` is OpenUniverse's own SN Ia model and halves a colour offset, but reaches only
-    20000 A rest-frame. The switch has to happen exactly where F184 stops fitting inside it, and
-    every SN Ia below that redshift still has to be generated -- a missing class in the brightest
-    bin would be a worse artefact than the model change."""
+def test_type_ia_use_one_salt_source_at_every_redshift():
+    """The class used to carry two spectral models split at z = 0.05, because `salt3-nir` stops
+    1000 A short of the F184 red edge. Padding it removed the split; this pins that it stays
+    removed, and that the pad is long enough to cover F184 at every redshift, z = 0 included."""
     sncosmo = pytest.importorskip("sncosmo")
     from kilonova.photometry.roman_noise import roman_bandpasses
 
     register_sources()
     red_edge = roman_bandpasses()["F184"].red_limit * 10
-    preferred = sncosmo.get_source(PREFERRED_IA_SOURCE)
-    assert red_edge / preferred.maxwave() - 1.0 == pytest.approx(PREFERRED_IA_MINIMUM_REDSHIFT, abs=1e-6)
-    for fallback in SOURCES_BY_LABEL["SN Ia"]:
-        assert sncosmo.get_source(fallback).maxwave() >= red_edge
+    assert IA_PAD_WAVELENGTH >= red_edge
+    assert SOURCES_BY_LABEL["SN Ia"] == [IA_SOURCE_NAME]
+    assert sncosmo.get_source(IA_SOURCE_NAME).maxwave() >= red_edge
 
     random_generator = np.random.default_rng(5)
-    redshifts = np.array([0.02, 0.049, 0.05, 0.2])
-    sources = {}
-    for redshift in redshifts:
+    for redshift in (0.02, 0.049, 0.05, 0.2):
         population = draw_population(1, np.array([redshift]), random_generator)
         while population[0]["label"] != "SN Ia":
             population = draw_population(1, np.array([redshift]), random_generator)
-        sources[redshift] = population[0]["source_name"]
-    assert sources[0.02] in SOURCES_BY_LABEL["SN Ia"]
-    assert sources[0.049] in SOURCES_BY_LABEL["SN Ia"]
-    assert sources[0.05] == PREFERRED_IA_SOURCE
-    assert sources[0.2] == PREFERRED_IA_SOURCE
+        assert population[0]["source_name"] == IA_SOURCE_NAME, redshift
+
+
+def test_padded_ia_source_matches_the_base_below_the_pad():
+    """The pad is an extrapolation and has to stay confined to the 1000 A it was added for.
+
+    Below 20000 A the padded source has to BE `salt3-nir` -- not approximately, exactly -- because
+    that is what makes the pad a statement about the sliver of F184 nothing measures rather than a
+    change to the SN Ia model. Above it, held flat at the last defined value."""
+    sncosmo = pytest.importorskip("sncosmo")
+
+    register_sources()
+    base = sncosmo.get_source(IA_BASE_SOURCE_NAME)
+    padded = sncosmo.get_source(IA_SOURCE_NAME)
+    assert padded.maxwave() == IA_PAD_WAVELENGTH
+    assert (padded.minwave(), padded.minphase(), padded.maxphase()) == (
+        base.minwave(),
+        base.minphase(),
+        base.maxphase(),
+    )
+
+    phases = np.arange(base.minphase(), base.maxphase(), 3.0)
+    inside = np.arange(base.minwave(), base.maxwave() + 1.0, 37.0)
+    assert padded.flux(phases, inside) == pytest.approx(base.flux(phases, inside), rel=0.0, abs=0.0)
+
+    edge = base.flux(phases, np.array([base.maxwave()]))
+    for wavelength in (base.maxwave() + 250.0, IA_PAD_WAVELENGTH):
+        assert padded.flux(phases, np.array([wavelength])) == pytest.approx(edge, rel=1e-12)
 
 
 def test_tde_templates_are_a_population_not_a_prior():
@@ -336,6 +400,220 @@ def test_tde_brightness_comes_from_the_model_not_from_a_drawn_magnitude():
         pytest.fail("no se sorteo ningun TDE en 40 intentos")
 
 
+def test_the_drawn_cadence_parity_reaches_the_window():
+    """`cadence_parity` was drawn, stored, passed and then discarded.
+
+    `build_window_from_model` honours `visit_index_offset` only when it is handed the visit grid;
+    the branch that derives the grid from the model's own range is the OpenUniverse one, where the
+    parity is not free. Taking that branch pinned every izc object to an even first visit -- the
+    first epoch carried (Z087, Y106, J129) 80 % of the time -- which is a cadence phase correlated
+    with nothing but the class of the object, in the sample built to remove such correlations."""
+    pytest.importorskip("sncosmo")
+    random_generator = np.random.default_rng(2)
+    # Enough objects that the threshold below is a statistic rather than a coin flip: at 24 the
+    # exception described above is one object and the fraction moves by 0.04 per object.
+    population = draw_population(96, random_generator.uniform(0.02, 0.3, 96), random_generator)
+    band_sets = {}
+    for parity in (0, 1):
+        for realization in population:
+            realization["cadence_parity"] = parity
+        windows, _ = build_izc_windows(population, "deep")
+        first_epoch = windows[(windows["epoch"] == 1) & windows["observed"]]
+        band_sets[parity] = first_epoch.groupby("object_id")["band"].apply(lambda bands: tuple(sorted(bands)))
+    # Not every object, and the exception is not a leak: the window starts at the FIRST DETECTION,
+    # not at the first visit, so an object too faint to be detected at the visit its parity picked
+    # starts a visit later -- which flips the parity back and lands it on the same band set under
+    # both. That can only happen at the detection threshold, and the bug this guards against gave
+    # zero flips out of every object rather than one exception out of a couple of dozen.
+    flipped = (band_sets[0] != band_sets[1]).mean()
+    assert flipped >= 0.9, flipped
+    assert set(band_sets[0]) == set(band_sets[1])  # the same two sets, swapped, not new ones
+
+
+def test_the_first_epoch_is_not_pinned_to_one_band_set():
+    """The consequence of the fix above, measured the way the bias was measured."""
+    pytest.importorskip("sncosmo")
+    random_generator = np.random.default_rng(23)
+    population = draw_population(120, random_generator.uniform(0.02, 0.4, 120), random_generator)
+    windows, _ = build_izc_windows(population, "deep")
+    first_epoch = windows[(windows["epoch"] == 1) & windows["observed"]]
+    sets = first_epoch.groupby("object_id")["band"].apply(lambda bands: tuple(sorted(bands)))
+    share = sets.value_counts(normalize=True)
+    assert len(share) == 2, share.to_dict()
+    assert share.max() < 0.65, share.to_dict()
+
+
+def test_the_visit_grid_does_not_start_at_the_same_phase_every_time():
+    """The other degree of freedom: the delay from the model's first phase to the first visit.
+
+    In the sky the visit grid is fixed in absolute time and the explosion is not, so this is
+    uniform over the 5-day interval between visits. Left at zero it would make the phase of the
+    cadence a function of the redshift and of the template library, which is a function of class."""
+    random_generator = np.random.default_rng(31)
+    population = draw_population(200, np.full(200, 0.1), random_generator)
+    offsets = np.array([realization["visit_phase_offset_days"] for realization in population])
+    assert offsets.min() >= 0.0 and offsets.max() < 5.0
+    assert np.percentile(offsets, 90) - np.percentile(offsets, 10) > 3.0
+
+
+def test_the_luminosity_functions_carry_the_y106_calibration():
+    """The medians are anchored to OpenUniverse's own M(Y106), not to a rest-frame B measurement.
+
+    Normalising in rest-frame B fixes the brightness in B and leaves Y106 to each template's own
+    B - Y colour, which is a property of the library: a class-correlated brightness offset inside
+    the band the classifier reads. `scripts/calibrate_izc_brightness.py` measures it against
+    OpenUniverse's own objects and the rule is that an offset below two standard errors of the
+    median is noise and is not applied.
+
+    The offsets below are the ones measured against OPENUNIVERSE'S OWN TEMPLATES, which is a
+    different calibration from the one this test used to hold: with the SNANA/Nugent substitution
+    the chain was -17.18 - 0.142 - 0.119 for SN Ib and -17.36 - 0.478 for SN Ic. Those templates
+    are gone, so their calibration is gone with them, and what is left is one offset per class
+    measured in one run.
+
+    The comparison itself needs `data/openuniverse/early_windows_deep.parquet` and does not belong
+    in a unit test; what is checked here is that its result survived. First the two offsets that
+    were applied, which is what a well-meaning edit back to a literature luminosity function would
+    silently undo, and then the brightness that comes out the far end -- generated at a fixed
+    z = 0.1, where nothing is lost to the detection cut, so the number is the model's own and not a
+    selection on it."""
+    pytest.importorskip("sncosmo")
+
+    # The distance modulus has to be the one the windows were built with, or the test measures the
+    # difference between two cosmologies: 0.066 mag at z = 0.1 between Planck18 and OpenUniverse's.
+    cosmology = openuniverse_cosmology()
+    assert PEAK_ABSOLUTE_MAGNITUDE["SN Ib"][0] == pytest.approx(-17.441 + 0.275, abs=1e-6)
+    assert PEAK_ABSOLUTE_MAGNITUDE["SN Ic"][0] == pytest.approx(-17.838 + 0.336, abs=1e-6)
+    assert PEAK_ABSOLUTE_MAGNITUDE["SN IIP"][0] == pytest.approx(-16.872 + 0.084, abs=1e-6)
+    assert PEAK_ABSOLUTE_MAGNITUDE["SN IIL"][0] == pytest.approx(-18.052 + 0.084, abs=1e-6)
+
+    calibrated_median_y106 = {"SN Ic": -18.04, "SN Ib": -17.32, "SN IIP": -16.80}
+    random_generator = np.random.default_rng(41)
+    for position, (label, reference) in enumerate(calibrated_median_y106.items()):
+        # The overwritten parameters get their OWN generator, so this median does not depend on how
+        # many values `draw_population` happens to consume per object. It used to: adding one draw
+        # inside it -- the SN Iax host AV -- moved the SN Ib median by three times the 0.079 mag
+        # spread this statistic has over independent seeds, and failed a test about a calibration
+        # that had not changed.
+        parameter_generator = np.random.default_rng([41, position])
+        population = draw_population(200, np.full(200, 0.1), random_generator)
+        for index, realization in enumerate(population):
+            realization["label"] = label
+            realization["source_name"] = str(parameter_generator.choice(SOURCES_BY_LABEL[label]))
+            realization["peak_absolute_magnitude"] = float(
+                parameter_generator.normal(*PEAK_ABSOLUTE_MAGNITUDE[label])
+            )
+            for key in ("salt2_x1", "salt2_c", "tde_template_index", "host_av", "host_rv"):
+                realization.pop(key, None)
+            realization["index"] = index
+        windows, _ = build_izc_windows(population, "deep")
+        y106 = windows[(windows["band"] == "Y106") & np.isfinite(windows["mag_true"])]
+        peak = y106.groupby(["object_id", "z_CMB"])["mag_true"].min().reset_index()
+        absolute = peak["mag_true"].to_numpy() - cosmology.distmod(peak["z_CMB"].to_numpy()).value
+        assert np.median(absolute) == pytest.approx(reference, abs=0.25), (label, np.median(absolute))
+
+
+def test_the_iax_pre_explosion_region_is_suppressed_where_the_notebook_suppresses_it():
+    """`flux[stretched < -rise_time] /= 2000` needs the notebook's grid to select anything.
+
+    On the repacked file's own 81 phases from -15 the stretched grid starts at exactly -rise_time,
+    the strict comparison fired on nothing, and the pre-explosion row reached the light curve as a
+    plateau. On IAX_NOTEBOOK_PHASES it starts at -2 * rise_time and the suppression covers the real
+    region between there and -rise_time, which is what cell 14 does."""
+    pytest.importorskip("sncosmo")
+    _, base_wavelength, base_flux = _iax_base_sed()
+    for rise_time in (7.0, 15.0, 22.0):
+        source = iax_source(rise_time, 1.6, 0.5)
+        assert source.minphase() == pytest.approx(-2.0 * rise_time)
+        suppressed = source.flux(-1.5 * rise_time, base_wavelength)
+        kept = source.flux(-rise_time, base_wavelength)
+        assert suppressed.max() < kept.max() / 100.0, rise_time
+
+
+def test_no_window_carries_a_colour_the_model_cannot_produce():
+    """The near-infrared shoulder MODEL_FLUX_FLOOR_MAGNITUDE cannot see.
+
+    `salt2-extended` hands out rows like J129 = 24.38 next to Z087 = 17.59, then J129 = 21.88, then
+    J129 = 17.93: every value is a legitimate magnitude and no absolute threshold separates them
+    from a faint object. What no transient does is move a colour by 4 mag in a day."""
+    pytest.importorskip("sncosmo")
+    random_generator = np.random.default_rng(13)
+    population = draw_population(40, random_generator.uniform(0.02, 0.4, 40), random_generator)
+    for realization in population:
+        curves = roman_light_curve(realization)
+        if not curves:
+            continue
+        days = curves[ALL_ROMAN_BANDS[0]][0]
+        magnitudes = np.array([curves[band][1] for band in ALL_ROMAN_BANDS])
+        colours = magnitudes - magnitudes.min(axis=0)[None, :]
+        rest_frame_step = np.diff(days) / (1.0 + realization["redshift"])
+        rate = np.abs(np.diff(colours, axis=1)).max(axis=0) / rest_frame_step
+        assert rate.max() <= MAXIMUM_COLOUR_RATE, (realization["label"], realization["source_name"])
+
+
+def test_the_sampling_grid_reaches_the_red_edge():
+    """`np.arange` is half open, and the coverage check is read off the sampled grid.
+
+    One missing step at the red end made every band the model covers exactly to its own edge come
+    back NaN. The unpadded `salt3-nir` was that case at z = 0.05."""
+    grid = _sampling_grid(4000.0, 21000.0, 10.0)
+    assert grid[0] == 4000.0 and grid[-1] == 21000.0
+    ragged = _sampling_grid(4000.0, 21003.0, 10.0)
+    assert ragged[-1] == 21003.0 and ragged[-2] == 21000.0
+
+
+def test_a_type_ia_at_the_bottom_of_the_range_still_produces_a_curve():
+    """The pad exists so that F184 survives at the reddest rest-frame the module ever samples.
+
+    z = 0.02 is the bottom of the generated range and the case the unpadded source failed; 0.05 is
+    where it used to become sufficient on its own and is kept as the other side of the old split."""
+    pytest.importorskip("sncosmo")
+    for redshift in (0.02, 0.05):
+        realization = {
+            "index": 0,
+            "label": "SN Ia",
+            "source_name": IA_SOURCE_NAME,
+            "peak_absolute_magnitude": -19.404,
+            "redshift": redshift,
+            "cadence_parity": 0,
+            "visit_phase_offset_days": 0.0,
+            "salt2_x1": 0.0,
+            "salt2_c": 0.0,
+        }
+        curves = roman_light_curve(realization)
+        assert set(curves) == set(ALL_ROMAN_BANDS), (redshift, sorted(curves))
+
+
+def test_phases_are_measured_from_maximum_not_from_the_source_phase_zero():
+    """The Nugent templates put phase zero at the explosion and maximum 11 to 17 d later; the SNANA
+    and SALT ones put zero at maximum. Sampled on the source's own phases, the classes that only
+    have Nugent templates would carry 20 fewer days of light curve after maximum, for no reason but
+    the convention of the file they were read from."""
+    pytest.importorskip("sncosmo")
+    realization = {
+        "index": 0,
+        "label": "SN IIL",
+        "source_name": "nugent-sn2l",
+        "peak_absolute_magnitude": -18.05,
+        "redshift": 0.05,
+        "cadence_parity": 0,
+        "visit_phase_offset_days": 0.0,
+    }
+    curves = roman_light_curve(realization)
+    days = curves["Y106"][0] / 1.05
+    magnitudes = curves["Y106"][1]
+    assert days.max() > REST_FRAME_PHASES.max() - 2.0, days.max()
+    assert abs(days[magnitudes.argmin()]) < 12.0, days[magnitudes.argmin()]
+
+
+def test_the_tde_bank_is_cached_whole():
+    """A window of 24 over 227 uniformly drawn templates measured no hits at all."""
+    from kilonova.simulation.intermediate_z_contaminants import tde_source
+
+    assert tde_source.cache_parameters()["maxsize"] is None
+    assert tde_template_count() == 227
+
+
 def test_several_tiers_give_what_one_tier_at_a_time_gives():
     """Asking for both tiers at once must be an optimisation, not a change of result.
 
@@ -354,3 +632,194 @@ def test_several_tiers_give_what_one_tier_at_a_time_gives():
         assert len(shared_windows) == len(alone_windows), tier
         if len(alone_windows):
             assert np.allclose(shared_windows["mag_true"], alone_windows["mag_true"], equal_nan=True)
+
+
+def test_iax_host_extinction_reproduces_openuniverse():
+    """SN Iax is the one class OpenUniverse dusts by hand and the one class this module dusts.
+
+    The percentiles are OpenUniverse's own, measured over the 115 645 SNe Iax of the 33 healpix
+    catalogues. They are pinned here rather than recomputed because the catalogues are not in the
+    repository, and they are what the three parameters of the AV law were fitted to: a drift in any
+    of them means the law no longer describes the population it was taken from."""
+    pytest.importorskip("sncosmo")
+
+    openuniverse = {
+        1: 0.009,
+        5: 0.039,
+        16: 0.126,
+        25: 0.202,
+        50: 0.440,
+        75: 0.801,
+        84: 1.027,
+        95: 1.752,
+        99: 2.608,
+    }
+    drawn = sample_iax_host_av(np.random.default_rng(0), 200_000)
+    assert drawn.min() >= IAX_HOST_AV_RANGE[0] and drawn.max() <= IAX_HOST_AV_RANGE[1]
+    for percentile, expected in openuniverse.items():
+        assert np.percentile(drawn, percentile) == pytest.approx(expected, abs=0.02), percentile
+    assert drawn.mean() == pytest.approx(0.5918, abs=0.01)
+
+    # The screen has to DIM what leaves the model, which it only does if the drawn absolute
+    # magnitude is set on the bare source; normalising through the dust would undo it exactly.
+    register_sources()
+    random_generator = np.random.default_rng(3)
+    population = [
+        one for one in draw_population(600, np.full(600, 0.05), random_generator) if one["label"] == "SN Iax"
+    ][:5]
+    assert population, "no SN Iax drawn"
+    for realization in population:
+        assert realization["host_rv"] == IAX_HOST_RV
+        bare = {key: value for key, value in realization.items() if key not in ("host_av", "host_rv")}
+        dimming = build_model(realization).bandmag("bessellv", "ab", 0.0) - build_model(bare).bandmag(
+            "bessellv", "ab", 0.0
+        )
+        # Band-integrated rather than monochromatic at 5500 A, so a few per cent above AV itself.
+        assert dimming == pytest.approx(realization["host_av"], rel=0.12)
+
+    # And no other class gets one.
+    for realization in draw_population(400, np.full(400, 0.1), np.random.default_rng(7)):
+        assert ("host_av" in realization) == (realization["label"] == "SN Iax"), realization["label"]
+
+
+def test_openuniverse_templates_have_no_zero_flux_gap():
+    """The audit's SOUND test, over the templates OpenUniverse itself used.
+
+    `defective_near_infrared_extension` runs two tests and they are not equally good. This pins
+    which is which, and it is settled by measurement rather than by argument now that the templates
+    are OpenUniverse's own rather than our reconstruction of them:
+
+      * THE ZERO-FLUX GAP DISCRIMINATES. A partial run of exact zeros inside 9000-21000 A is not
+        physics under any model. Every SNANA template carried one, at 42 to 84 of the 91 sampled
+        phases; the `snsedextend` reconstruction carried 1559 of them across 35 sources, and its
+        F184 - Y106 colour was 0.85 mag from OpenUniverse's and swung 2 mag across the sample's
+        redshift range. These templates carry ZERO, and their colour matches OpenUniverse's to
+        0.004 mag in SN II. That is the whole discrimination, and this test holds it.
+
+      * F184 BRIGHTER THAN H158 DOES NOT. It was always documented as a heuristic -- it assumes a
+        smooth declining continuum, and `salt3-nir-f184` violates it at 52 phases because a SN Ia
+        HAS a secondary near-infrared maximum. It is now known to be worse than that: 35 of
+        OpenUniverse's own 44 core-collapse templates violate it, and those templates are the
+        reference this sample is measured against. A criterion the reference fails is not a defect
+        criterion, so it is deliberately NOT asserted here.
+    """
+    pytest.importorskip("sncosmo")
+    register_sources()
+    audited = 0
+    for label, source_names in SOURCES_BY_LABEL.items():
+        if label in ("SN Iax", "TDE", "SN Ia"):
+            # None is an extended library template: SN Iax is warped per object, TDE is a blackbody
+            # over a MOSFiT photosphere, and SALT3 is parametric.
+            continue
+        for source_name in source_names:
+            gaps = [
+                reason
+                for reason in defective_near_infrared_extension(source_name)
+                if "zero-flux gap" in reason
+            ]
+            assert not gaps, (label, source_name, len(gaps), gaps[:3])
+            audited += 1
+    assert audited == 44
+
+
+def test_openuniverse_drew_no_hypernova_and_no_sn_iin_or_iib():
+    """What OpenUniverse actually drew, which is narrower than the library it drew from.
+
+    Read off `template_index` across 979 557 core-collapse objects: exactly 44 templates appear,
+    17 SN IIP, 7 SN IIL, 13 SN Ib and 7 SN Ic. Three consequences are pinned here because each one
+    used to be an open decision or a documented worry:
+
+      * NO SN IIn AND NO SN IIb. The V19 library carries templates of both. Generating either would
+        put a class in the sample that the population it stands in for does not contain, and it is
+        also what settles the question of adding SN IIb rather than leaving it to judgement.
+      * NO SN 1998bw. The hypernova template is in the library and OpenUniverse did not draw it, so
+        the cross-class contamination this module used to guard against -- SN 1998bw supplying 22 %
+        of the SN Ib draws when it was listed under both classes -- cannot arise here at all.
+      * The SN II subtype split is 17/24 and 7/24, MEASURED, where it used to be the 0.70/0.15/0.15
+        of Li et al. (2011) standing in for exactly this.
+    """
+    assert set(SOURCES_BY_LABEL) == {"SN IIP", "SN IIL", "SN Ib", "SN Ic", "SN Ia", "SN Iax", "TDE"}
+    assert len(SOURCES_BY_LABEL["SN IIP"]) == 17
+    assert len(SOURCES_BY_LABEL["SN IIL"]) == 7
+    assert len(SOURCES_BY_LABEL["SN Ib"]) == 13
+    assert len(SOURCES_BY_LABEL["SN Ic"]) == 7
+    every = sum(SOURCES_BY_LABEL.values(), [])
+    assert not [name for name in every if "1998bw" in name]
+    assert SN_II_SUBTYPE_FRACTION == {"SN IIP": 17.0 / 24.0, "SN IIL": 7.0 / 24.0}
+
+
+def test_the_pruned_templates_are_still_defective():
+    """The templates the audit removed fail it, so the cut is reproducible and not a preference.
+
+    Named explicitly because the cost was severe -- every SNANA template goes, leaving four
+    distinct SEDs for the whole core-collapse half of the sample --
+    and a future reader is owed the ability to re-run the exact decision.
+    """
+    pytest.importorskip("sncosmo")
+    register_sources()
+    removed = [
+        "snana-2004hx",
+        "snana-2005gi",
+        "snana-2006gq",
+        "snana-2006iw",
+        "snana-2006jl",
+        "snana-2006kn",
+        "snana-2006kv",
+        "snana-2007iz",
+        "snana-2007kw",
+        "snana-2007ky",
+        "snana-2007lb",
+        "snana-2007ld",
+        "snana-2007lj",
+        "snana-2007ll",
+        "snana-2007lx",
+        "snana-2007lz",
+        "snana-2007md",
+        "snana-2007ms",
+        "snana-2007nr",
+        "snana-2007nv",
+        "snana-2007nw",
+        "snana-2007pg",
+        "snana-2004gv",
+        "snana-2004ib",
+        "snana-2005hm",
+        "snana-2006ep",
+        "snana-2006jo",
+        "snana-2007nc",
+        "snana-2007y",
+        "snana-04d1la",
+        "snana-04d4jv",
+        "snana-2004fe",
+        "snana-2004gq",
+        "snana-2006fo",
+        "snana-2006lc",
+        "snana-sdss004012",
+        "snana-sdss014475",
+    ]
+    for source_name in removed:
+        assert defective_near_infrared_extension(source_name), source_name
+        assert all(source_name not in names for names in SOURCES_BY_LABEL.values()), source_name
+
+
+def test_sn_iil_and_sn_iip_nugent_templates_are_the_same_sed():
+    """Pins the finding that `nugent-sn2l` and `nugent-sn2p` are one SED under two names.
+
+    Not a defect to fix -- it is what the library ships -- and it is why substituting the Nugent
+    sources for the missing V19 extension was never satisfying: while they were the only SN IIP and
+    SN IIL sources, NO colour whatsoever separated those two classes, which differed in their light
+    curve and their luminosity function and in nothing else. Kept as the provenance of that, and
+    neither template is drawn any more. Checked across phases rather than
+    at maximum alone, because the light curves genuinely do differ -- at +80 d the SN IIL has
+    declined 4.41 mag against the SN IIP's 2.15 -- and only the spectral shape is shared.
+    """
+    sncosmo = pytest.importorskip("sncosmo")
+    import numpy
+
+    iip = sncosmo.get_source("nugent-sn2p")
+    iil = sncosmo.get_source("nugent-sn2l")
+    wavelength = numpy.arange(3000.0, 25000.0, 20.0)
+    for offset in [0.0, 10.0, 20.0, 40.0, 60.0]:
+        iip_flux = iip.flux(iip.peakphase("bessellb") + offset, wavelength)
+        iil_flux = iil.flux(iil.peakphase("bessellb") + offset, wavelength)
+        ratio = iil_flux / numpy.where(iip_flux > 0, iip_flux, numpy.nan)
+        assert numpy.nanstd(ratio) / numpy.nanmean(ratio) < 0.05, offset
