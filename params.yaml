@@ -16,3 +16,19 @@ kilonova_windows:
   n_redshift: 100
   redshift_spacing: log
   realizations_per_redshift: 10000
+
+# El izc rellena el deficit de contaminantes de bajo redshift contra el histograma de las KN.
+#
+# 0.9 llena el 90% de CADA bin: el faltante se reparte por igual sobre todo el rango, no se
+# concentra arriba. Medido sobre la corrida vigente, la razon (contaminantes OU + izc) / KN queda
+# en 0.80-1.10 en deep y 0.89-2.33 en wide. Alcanza de sobra para lo que la muestra existe: el
+# atajo era 29 contaminantes contra 239 369 KN en el primer bin, y un deficit residual del 12% no
+# es explotable como lo era uno de factor 8000.
+#
+# LO QUE ESTE NUMERO NO CONTROLA es la reutilizacion de padres. Esa viene del muestreo CON
+# REEMPLAZO de draw_population_from_parents, no de que falten padres: medido, SN Ib y SN Ic dan
+# 1.59 copias por padre a escala 0.9 y darian 1.67 a 1.0, aun cuando piden aproximadamente tantos
+# objetos como padres hay. Bajar la escala casi no la mueve. Lo que la contiene es el split por
+# `parent_key`, que mantiene a un padre y a todas sus copias del mismo lado.
+izc_windows:
+  deficit_scale: 0.9

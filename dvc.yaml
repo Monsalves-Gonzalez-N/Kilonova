@@ -60,3 +60,28 @@ stages:
     outs:
       - data/openuniverse/kn_windows_deep.parquet
       - data/openuniverse/kn_windows_wide.parquet
+
+  # Contaminantes de bajo redshift: re-renderiza objetos de OpenUniverse al redshift donde el
+  # survey no tiene ninguno. Depende de los otros dos datasets porque el DEFICIT se mide contra
+  # ellos: cambiar la grilla de KN cambia cuantos objetos hay que generar y a que redshift.
+  # --source y --workers no van en el cmd: son decisiones de la maquina (el hdf5 esta en /Volumes/T7,
+  # ver configs/paths.yaml), no del dataset.
+  izc_windows:
+    cmd: >-
+      kn-izc-windows
+      --output-dir data/openuniverse
+      --deficit-scale ${izc_windows.deficit_scale}
+    params:
+      - izc_windows
+    deps:
+      - data/openuniverse/kn_windows_deep.parquet
+      - data/openuniverse/kn_windows_wide.parquet
+      - data/openuniverse/early_windows_deep.parquet
+      - data/openuniverse/early_windows_wide.parquet
+      - data/openuniverse/cc_templates.npz
+      - src/kilonova/simulation/intermediate_z_contaminants.py
+      - src/kilonova/simulation/openuniverse_parents.py
+      - src/kilonova/photometry/roman_noise.py
+    outs:
+      - data/openuniverse/izc_windows_deep.parquet
+      - data/openuniverse/izc_windows_wide.parquet

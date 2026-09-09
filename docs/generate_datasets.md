@@ -95,12 +95,19 @@ still in `intermediate_z_contaminants`, unused. It reads, in order:
   training set will use, or the sample fills a hole that is not there;
 - `snana_{healpix}.hdf5` — the parent's full light curve, which is where its brightness comes from.
 
-The deficit is 670 595 objects; `--deficit-scale 0.9` fills 90 % of every bin, which is 603 537
-objects and about 1.5 h on 6 workers. The 0.9 is deliberate: at 1.0 the SN Ib and SN Ic shares ask
-for 13 % more objects than OpenUniverse has parents of those classes, so they get drawn with
-replacement; at 0.9 that falls to 2 %. The unfilled 10 % sits in the bins above z = 0.45, where
-OpenUniverse already has contaminants of its own. Smoke test with `--limit-objects 400`, which
-keeps the deficit's shape and only changes the count.
+The deficit is 670 595 objects; `--deficit-scale 0.9` fills 90 % of **every** bin — the shortfall
+is spread uniformly over the whole range, it does not concentrate at high z — which is 603 537
+objects and 40 min on 6 workers. That leaves (OpenUniverse + izc) / KN at 0.80–1.10 per bin in
+deep, and it is enough: the shortcut this sample exists to remove was 29 contaminants against
+239 369 kilonovae in the first bin, and a residual 12 % imbalance is not exploitable the way a
+factor of 8000 was. Smoke test with `--limit-objects 400`, which keeps the deficit's shape and
+only changes the count.
+
+Parent reuse is NOT what that knob controls. Parents are drawn **with replacement**, so collisions
+set the reuse rather than the size of the pool: SN Ib and SN Ic come out at 1.59 copies per parent
+at 0.9 and would be 1.67 at 1.0, even though they ask for about as many objects as OpenUniverse has
+parents of those classes. What contains it is the leakage-aware split on `parent_key`, which keeps
+a parent and all of its copies on one side.
 
 ## 3c. Train
 
@@ -115,14 +122,30 @@ the wrong one.
 
 ## 4. Publish (never git — DVC)
 
+All six parquets are outputs of `dvc.yaml` STAGES, not free-standing `dvc add` files, so `dvc add`
+refuses them ("overlaps with an output of stage"). Record them with `dvc commit`, which writes the
+hashes of what is on disk into `dvc.lock` without re-running anything:
+
 ```bash
-dvc add data/openuniverse/early_windows_deep.parquet data/openuniverse/early_windows_wide.parquet
-dvc add data/openuniverse/kn_windows_deep.parquet data/openuniverse/kn_windows_wide.parquet
-dvc add data/openuniverse/izc_windows_deep.parquet data/openuniverse/izc_windows_wide.parquet
+dvc commit -f early_windows kilonova_windows izc_windows
 dvc push
-git add data/openuniverse/*.dvc data/.gitignore
-git commit -m "Regenerate datasets: fixed cadence + KN redshift grid"
+git add dvc.lock dvc.yaml params.yaml
+git commit -m "Regenerar los datasets"
 git push
 ```
 
-The parquets themselves must never be committed to git; only the `.dvc` pointers.
+The parquets themselves must never be committed to git; only `dvc.lock`.
+
+## 5. On the other machine
+
+```bash
+git clone https://github.com/Monsalves-Gonzalez-N/Kilonova.git && cd Kilonova
+pip install -e .
+dvc pull                     # the six parquets, ~2.6 GB
+python training/train_lightning.py --data-dir data/openuniverse
+```
+
+`dvc pull` reads the Dropbox remote (`~/Dropbox/Kilonova/dvc-kilonova`), so Dropbox has to have
+finished syncing there AND the files have to be real rather than placeholders — mark the folder
+"available offline" in Finder first. A placeholder reads as an EMPTY FILE with no error, which is
+the failure mode this repository has hit before.
