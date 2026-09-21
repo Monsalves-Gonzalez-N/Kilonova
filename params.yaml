@@ -4,10 +4,17 @@ extinguish:
   redshift_max: 1.0
   n_redshift: 50
 
-# Grilla con la que se generaron los kn_windows_*.parquet vigentes (2026-07-30).
-# 100 nodos x 10000 realizaciones = 1e6. Con el factor angular aplicado hay detecciones en TODOS
-# los nodos, incluido z=1 (7.0% deep, 0.9% wide), asi que la grilla se satura por arriba: para
-# medir el z5% de deep hay que subir redshift_max. El techo real de diversidad no es este numero
+# Grilla con la que se generan los kn_windows_*.parquet. 100 bines x 10000 realizaciones = 1e6.
+#
+# n_redshift son BINES, no nodos: desde 2026-09-16 `sample_kn_realizations_in_bins` sortea el
+# redshift DENTRO del bin en vez de pegarlo al nodo. Con el z en el nodo, el millon de KN ocupaba
+# exactamente 100 valores de redshift contra los 630 583 de los contaminantes, y "z esta en la
+# grilla KN" clasificaba al 99.998% sin mirar una curva. No cuesta computo: la fotometria ya se
+# integraba por realizacion, no por nodo.
+#
+# Con el factor angular aplicado hay detecciones en TODO el rango, incluido z=1 (7.0% deep, 0.9%
+# wide), asi que la grilla se satura por arriba: para medir el z5% de deep hay que subir
+# redshift_max. El techo real de diversidad no es este numero
 # sino las 900 simulaciones LANL x 54 angulos = 48600 SEDs distintas, asi que cada SED se repite
 # ~20 veces.
 kilonova_windows:
@@ -30,5 +37,15 @@ kilonova_windows:
 # 1.59 copias por padre a escala 0.9 y darian 1.67 a 1.0, aun cuando piden aproximadamente tantos
 # objetos como padres hay. Bajar la escala casi no la mueve. Lo que la contiene es el split por
 # `parent_key`, que mantiene a un padre y a todas sus copias del mismo lado.
+#
+# brightness_source: de donde sale el brillo de cada padre.
+#   window -- de su propia ventana en early_windows_{tier}.parquet, anclada a la plantilla por
+#             `window_anchor`. No abre el hdf5: la muestra se genera con lo que ya esta en el repo.
+#             Solo puede usar padres QUE EL SURVEY DETECTO, asi que a cada z faltan los mas
+#             debiles; se asume, porque 48 modelos se reparten 1.3 millones de objetos y la parte
+#             debil de una plantilla llega igual por los objetos detectados mas abajo.
+#   hdf5   -- del pico de la curva de luz completa, en los 16 GB por campo del release. Es contra
+#             lo que se calibro el otro camino: sobre 1320 objetos los dos coinciden en 0.002 mag.
 izc_windows:
   deficit_scale: 0.9
+  brightness_source: window

@@ -64,13 +64,14 @@ stages:
   # Contaminantes de bajo redshift: re-renderiza objetos de OpenUniverse al redshift donde el
   # survey no tiene ninguno. Depende de los otros dos datasets porque el DEFICIT se mide contra
   # ellos: cambiar la grilla de KN cambia cuantos objetos hay que generar y a que redshift.
-  # --source y --workers no van en el cmd: son decisiones de la maquina (el hdf5 esta en /Volumes/T7,
-  # ver configs/paths.yaml), no del dataset.
+  # --source y --workers no van en el cmd: son decisiones de la maquina, no del dataset. Con
+  # brightness_source: window el hdf5 ya no se lee, asi que --source ni hace falta.
   izc_windows:
     cmd: >-
       kn-izc-windows
       --output-dir data/openuniverse
       --deficit-scale ${izc_windows.deficit_scale}
+      --brightness ${izc_windows.brightness_source}
     params:
       - izc_windows
     deps:
@@ -79,8 +80,16 @@ stages:
       - data/openuniverse/early_windows_deep.parquet
       - data/openuniverse/early_windows_wide.parquet
       - data/openuniverse/cc_templates.npz
+      - data/openuniverse/tde_template.npz
+      - data/openuniverse/slsn_template.npz
+      - data/openuniverse/iax_templates.npz
+      - data/openuniverse/salt3_nir_waveext
+      # La tabla de anclas ES un input del brillo cuando se mide contra la ventana: cambiarla
+      # cambia la fase, y la fase cambia el zero point de cada objeto.
+      - data/openuniverse/template_phase_anchor.csv
       - src/kilonova/simulation/intermediate_z_contaminants.py
       - src/kilonova/simulation/openuniverse_parents.py
+      - src/kilonova/simulation/window_anchor.py
       - src/kilonova/photometry/roman_noise.py
     outs:
       - data/openuniverse/izc_windows_deep.parquet

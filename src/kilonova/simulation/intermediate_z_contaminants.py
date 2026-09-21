@@ -87,36 +87,46 @@ parents from the catalogue removes the question rather than answering it.
 The redshift distribution is not chosen here at all: `draw_population_from_parents` takes it from
 its caller, and `kn-izc-windows` supplies the deficit of `redshift_deficit`.
 
-NO SUBSTITUTIONS, and that is a scope decision rather than an achievement. The sample exists to
-REPOPULATE the low-redshift bins of a population OpenUniverse already defines. A class whose SED
-this side has to supply is not being moved in redshift, it is being added, and the sample would
-then have to be defended as a model of that class rather than as a redistribution of
-OpenUniverse's. So three kinds of class are out:
+NO SUBSTITUTIONS, AND NOW THERE ARE NONE. The sample exists to REPOPULATE the low-redshift bins of
+a population OpenUniverse already defines: a class whose SED this side has to supply is not being
+moved in redshift, it is being added, and the sample would then have to be defended as a model of
+that class rather than as a redistribution of OpenUniverse's. That used to exclude classes. It no
+longer excludes any that matter, because OpenUniverse published its models
+(zenodo.org/records/14749318) and every SED here is read out of that release:
 
-  * TDE. OpenUniverse's is the observed SED of AT2019qiz, never published as a usable template.
-    MOSFiT's `tde` stood in for it and reproduced OpenUniverse's own photometry of its own objects
-    to 0.19 mag, against 0.01 mag for the classes that remain, with a clear colour trend.
-  * SN Iax. OpenUniverse's own model, but REGENERATED here from the published Rutgers notebook
-    rather than read from the release -- the one class where the release ships no template this
-    side can read. The regeneration is faithful enough to replay the notebook's own numbers and
-    still lands 0.05 mag off OpenUniverse's photometry, which is the reimplementation showing.
-  * SLSN-I and PISN (0.39 % of the mix), and every gentype `openuniverse_parents.PARENT_GENTYPES`
-    does not list, for the older reason that they have no usable template on this side at all.
+  * The core-collapse SEDs were recovered from OpenUniverse's light-curve files, and before that
+    extended into the near-infrared here with `snsedextend`. Both are gone; the 44 templates are
+    read from `NON1ASED.V19_CC+HostXT_WAVEEXT`.
+  * SN Ia was sncosmo's `salt3-nir` held flat over the 1000 A it is missing. Now it is the
+    release's own `SALT3.NIR_WAVEEXT`, which is the same model with 5000 A more of it.
+  * TDE was MOSFiT's `tde` standing in for the observed SED of AT2019qiz, 0.19 mag off with a
+    colour trend. Now it is `2019qiz.sed`: 0.017 mag, no trend.
+  * SN Iax was a replay of the Rutgers notebook OpenUniverse cites, 0.19 mag off with a 0.28 mag
+    colour trend. Now it is the 919 SEDs of `SIMSED.SNIax` that OpenUniverse actually drew.
+  * SLSN-I was out because it had no template on this side at all. Now it is `2016apd.sed`:
+    0.015 mag, and its own 10 pc calibration is OpenUniverse's exactly.
 
-The models for the first two are still in this file, with their provenance and their tests, and
-nothing draws them: putting one back means adding its label to CLASS_FRACTION and its gentype to
-PARENT_GENTYPES, and re-opening the argument above.
+ONE CLASS IS STILL OUT, and for a reason about coverage rather than about provenance. PISN's SEDs
+stop at 20000 A rest-frame while F184's red edge is 21000, so it cannot cover F184 without
+extrapolating below z = 0.050 -- and this sample's redshift grid starts at 0.010. It cannot be
+rendered in the bins the sample exists to fill. So are the OpenUniverse kilonovae (50), which are
+the class the classifier is being taught to find, and gentype 99, which is not a transient at all:
+27771 objects whose magnitude does not vary in time and is identical in all six bands, a
+fixed-magnitude calibration source.
 
-There used to be a substitution larger than either, the core-collapse SEDs. It is gone -- those
-templates are now read out of OpenUniverse's own release, see OPENUNIVERSE_ARCHIVE_PATH -- and the
-limitation it carried is gone with it. Where this module once put the SNANA and Nugent libraries
-below z = 0.91 and OpenUniverse's V19+HostXT above, which is a difference aligned with redshift and
-therefore the exact shape of the shortcut this sample exists to remove, both halves are now the
-same 44 templates.
+WHERE THE LUMINOSITY COMES FROM IS A SEPARATE QUESTION from where the SED does, and the answer is
+not the same for every class. SN Iax, TDE and SLSN-I carry an absolute calibration their files
+declare -- "erg/s/cm^2/A scaled to 10 pc" -- and it is OpenUniverse's own, verified to 0.15, 0.10
+and 0.00 mag. The V19 core-collapse files declare nothing, and one of them is mis-normalised by
+4 mag: `SN2011bm` reads M_B = -13.22 where its six SN Ic siblings read -16.5 to -17.8, and its
+MAGOFF is -4.56 where theirs are -1.46 to 0.00. That MAGOFF is a repair, not a luminosity-function
+adjustment, which is why core-collapse is the one class whose file normalisation is not trusted.
+None of this reaches the generated sample today, which measures every brightness off the parent's
+own light curve -- see REFERENCE_ABSOLUTE_MAGNITUDE -- but it is what a parametric route would use.
 
-The near-infrared extrapolation those templates carry is OpenUniverse's own and is shared by both
+The near-infrared extension those templates carry is OpenUniverse's own and is shared by both
 populations rather than added by this one: `_WAVEEXT` is an extension by the methods of Pierel et
-al. (2018), and every OpenUniverse contaminant above z = 0.91 already rests on it. What remains
+al. (2018), and every OpenUniverse contaminant already rests on it. What remains
 worth measuring is whether these models reproduce real supernovae at the redshifts this sample
 generates, and that is measured rather than declared: `scripts/compare_csp_lightcurves.py` puts
 them, continuous, under the discrete uBgVriYJH photometry of the Carnegie Supernova Project. Every
@@ -183,222 +193,150 @@ def openuniverse_cosmology():
 # separable from a real one in the parquet while `label` still maps it to the same class.
 IZC_GENTYPE_OFFSET = 200
 
-# --- SN Iax (RETAINED, NOT GENERATED) ------------------------------------------------------------
-# Not in CLASS_FRACTION and not in PARENT_GENTYPES: this is the one class where OpenUniverse ships
-# no template this side can read, so its SED has to be regenerated here rather than moved, and the
-# regeneration lands 0.05 mag off OpenUniverse's own photometry. See NO SUBSTITUTIONS in the module
-# docstring. Everything below is kept, with its tests, so that re-enabling it is a two-line change
-# and not a re-derivation.
-# NOT a substitution: this is OpenUniverse's own model, regenerated. OpenUniverse used "1000 SED
-# templates from the original PLAsTiCC model" (OpenUniverse2024, sec. 4.2), which is Jha & Dai's
-# model released at github.com/RutgersSN/SNIax-PLAsTiCC (commit 908762c, BSD-3): a single SN 2005hk
-# base SED plus a luminosity function and width-luminosity relations, warped into a bank of
-# templates by the repository's `Iax-model.ipynb`. `data/iax/sn2005hk_sed.npz` is that base SED,
-# repacked from `SN2005hk/sn2005hk.sed.dat`, and `data/iax/jha2017-table1.csv` is the repository's
-# own copy of the Jha (2017) Table 1.
+# --- SN Iax ---------------------------------------------------------------------------------------
+# OpenUniverse's OWN SN Iax SEDs, read out of its published release.
 #
-# THE BANK IS REPLAYED, NOT RESAMPLED. The notebook is deterministic -- `np.random.seed(4)`, then
-# three random-consuming steps in a fixed order -- so `_iax_bank()` reproduces its exact 1001 rows
-# of (M_V, t_rise, dm15B, dm15R) rather than drawing new ones from the same distributions. This
-# module used to sample the luminosity function continuously and then draw the shape parameters
-# around the drawn magnitude, which is the same distribution but not the same objects, and it made
-# every izc SN Iax an object OpenUniverse never generated.
+# This used to be a REGENERATION. OpenUniverse used "1000 SED templates from the original PLAsTiCC
+# model" (OpenUniverse2024, sec. 4.2) -- Jha & Dai's model at github.com/RutgersSN/SNIax-PLAsTiCC --
+# and, believing the bank unpublished, this module replayed the repository's `Iax-model.ipynb` to
+# rebuild it: a SN 2005hk base SED, a luminosity function, width-luminosity relations and a warp,
+# all reproduced here deterministically. `MODELS-1_TRANSIENT_SED.tar` ships the bank itself, as
+# `SIMSED.SNIax`, so the replay is gone with all 100 lines of constants it needed.
 #
-# `data/iax/sn2005hk_sed.npz` is byte-for-byte the notebook's own input: the notebook loads
-# `sn2005hk.source.pickle`, and flux ratios of that pickle against this npz are 1.000000 at every
-# phase and wavelength (1st to 99th percentile).
+# WHAT IT COST AND WHAT THE RELEASE BUYS, both measured over the same 440 parents. The replay
+# reproduced OpenUniverse's own photometry to 0.19 mag band-to-band, with a monotonic colour trend
+# of 0.28 mag across R062 to F184 -- the size of a substitution, not of a pipeline, and the worst
+# class in the sample by a factor of ten. The release's own SEDs give 0.012 mag and a colour trend
+# of 0.05, all of it in R062. A factor of 16.
 #
-# ONLY THE FIRST 919 ROWS SHIPPED. The notebook draws `ssize = 1001`, but OpenUniverse's catalogue
-# carries `template_index` 1 to 919, contiguous and with no gaps, over all 115 645 of its SNe Iax.
-# The mapping is `template_index - 1` into the replayed bank, verified rather than assumed: against
-# the dust-corrected peak absolute LSST-g magnitude of the 1923 OpenUniverse SNe Iax below z = 0.45
-# the replayed M_V gives slope +0.990 and correlation +0.983, where the same bank shuffled gives
-# -0.022. So a draw is a uniform index into 1..919, and OpenUniverse's own draws are uniform over
-# the redshifts this module generates (chi2/dof = 1.18 below z = 0.45; the non-uniformity above
-# z = 1.5 is Malmquist selection, not a weight).
-IAX_SOURCE_NAME = "iax-2005hk"
-IAX_BASE_SED_PATH = Path(__file__).resolve().parents[3] / "data" / "iax" / "sn2005hk_sed.npz"
-IAX_JHA_TABLE_PATH = Path(__file__).resolve().parents[3] / "data" / "iax" / "jha2017-table1.csv"
-IAX_BANK_SEED = 4
-IAX_BANK_DRAWN = 1001  # what the notebook draws
-IAX_BANK_SIZE = 919  # what OpenUniverse shipped, and what a draw indexes
+# THE RELEASE'S INDEX IS OFF BY ONE, and this is the one place that matters here. `NON1A.LIST` says
+# `template_index` 1 is `SED-Iax-0001.dat`; OpenUniverse used `SED-Iax-0000.dat`. Measured over
+# 4357 parents on 40 templates, the absolute magnitude OpenUniverse gave each object correlates with
+# the one its file carries at r = 0.998 under that shift and r = 0.055 without it. The bank is a
+# random draw per row, so neighbouring files are unrelated and the error hides perfectly as "the
+# calibration was overwritten" -- which is what a first pass of this measurement concluded.
+# `scripts/build_openuniverse_extra_templates.py` applies the shift, so the archive is in
+# OpenUniverse's own `template_index` order and this module indexes it from zero.
+#
+# THE FLUX IS ABSOLUTE and is used as such: the files declare "erg/s/cm^2/A scaled to 10 pc" and
+# the calibration is OpenUniverse's to 0.15 mag rms. Nothing is applied on top, unlike the
+# core-collapse templates. Every SN Iax also carries a host dust screen -- AV != -9 for 100 % of
+# them, median 0.440 -- which the parent supplies and `build_model` applies; leaving it out shows up
+# as exactly the monotonic colour residual the replay had.
+IAX_SOURCE_NAME_PREFIX = "ou-iax-"
+IAX_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "data" / "openuniverse" / "iax_templates.npz"
+IAX_BANK_SIZE = 919  # what OpenUniverse shipped and what a `template_index` indexes
 
-# Luminosity function: linear in M_V with a Gaussian rolloff at each end, fitted by Jha & Dai to
-# the 51 SNe Iax of their Table 1. Deliberately NOT a Gaussian -- the class spans M_V = -13 to -18
-# and a symmetric law would misplace both ends. It is used to BUILD the bank, never to draw from.
-IAX_ABSOLUTE_MAGNITUDE_RANGE = (-20.0, -11.0)
-IAX_ABSOLUTE_MAGNITUDE_STEP = 0.01
-IAX_BRIGHT_ROLLOFF, IAX_BRIGHT_SIGMA = -18.0, 0.5
-IAX_FAINT_ROLLOFF, IAX_FAINT_SIGMA = -13.0, 0.4
-# The notebook inverts the CDF onto this grid and then interpolates the draws through it, a double
-# interpolation that has to be reproduced step for step or the replay drifts off the published bank.
-IAX_INVERSE_CDF_STEP = 0.0001
-# Cell 6 fits the observed sample by rejection against a magnitude limit. Its result is never used,
-# but it consumes 51 rejection loops' worth of random numbers between the magnitudes and the shape
-# parameters, so the replay has to run it to stay on the notebook's random stream.
-IAX_REJECTION_MAGNITUDE_LIMIT = 20.3
-IAX_REJECTION_COSMOLOGY = (73.0, 0.3)  # H0, Om0, as the notebook sets them
-
-# Width-luminosity relations, all in terms of (M_V + 19). Rise time follows Magee et al. (2016);
-# the two decline rates are Jha & Dai's own fits. The scatter is theirs too and is what keeps the
-# class from collapsing onto one light-curve shape.
-IAX_RISE_TIME_SCATTER = 2.0
-IAX_DECLINE_B_SCATTER = 0.25
-IAX_DECLINE_R_SCATTER = 0.2
-IAX_BASE_RISE_TIME = 15.0  # hardcoded in the SN 2005hk SED, per the notebook
-
-# The notebook's own grid, and this module now builds the base SED on it rather than on the
-# repacked file's 81 phases from -15 to +65. That is not cosmetic: three of the notebook's four
-# processing steps are written as INDICES into this grid, and on a shorter grid they land on
-# different phases. `flux[10:]` is phase -20 here and was phase -5 on the old grid; `flux[70:]` is
-# phase +40; and the pre-explosion suppression of `iax_source` is a strict `<` that selects a real
-# 15-day region here and selected nothing at all when the grid began at -15.
+# --- SLSN-I ---------------------------------------------------------------------------------------
+# OpenUniverse's own SLSN-I SED, a grey blackbody fit to Gaia16apd (Yan et al. 2017, Kanga et al.
+# 2017). This class was never a substitution -- it simply had no template on this side at all, which
+# is why it was excluded. It has one now.
 #
-# The grid runs to +200 d but the SED does not. sncosmo returns zero outside the base file's own
-# -15 to +65, so everything past +65 is the smoothing of that edge and peaks at 4e-16 -- the late
-# extension is a decay to zero, not data. It is reproduced because OpenUniverse's templates carry
-# it, not because it holds any flux.
-IAX_NOTEBOOK_PHASES = np.linspace(-30.0, 200.0, 231)
-IAX_NOTEBOOK_WAVELENGTHS = np.linspace(1000.0, 25000.0, 2401)
-IAX_SMOOTHING_SIGMA_PHASES = 4.0
-IAX_SMOOTHED_WAVELENGTHS = (8000.0, 11000.0)  # z and y, "too wiggly" in the notebook's words
-IAX_SMOOTHED_FROM_INDEX = 10  # phase -20
-IAX_LATE_DECLINE_PHASE = 50.0
-IAX_LATE_DECLINE_EFOLD = 72.4  # d; enforces 0.015 mag/day past IAX_LATE_DECLINE_PHASE
-IAX_LATE_SMOOTHED_FROM_INDEX = 70  # phase +40
-
-# The dm15(R) warp is anchored at five wavelengths and has to be spread over the full grid. The
-# notebook used `scipy.interpolate.interp2d`, removed from SciPy in 1.14; `RectBivariateSpline`
-# with kx = ky = 1 is SciPy's own documented replacement for it.
+# ONE TEMPLATE, which is what OpenUniverse drew: all 1122 of its SLSN-I carry `template_index` 1.
+# Measured over all of them, the band-to-band residual against OpenUniverse's own photometry is
+# 0.015 mag and its 10 pc calibration is OpenUniverse's EXACTLY: -21.75 against -21.75.
 #
-# What happens redward of the last anchor is the question, because for Roman that is most of the
-# bands. This module carried a comment claiming interp2d extrapolated the 7500-9000 A slope out to
-# 25000 A and that the replacement therefore changed the model. It does not: interp2d's
-# out-of-domain behaviour was nearest-neighbour, which is clamping, and RectBivariateSpline clamps
-# too. The two agree to 2e-16 on this module's own anchors, and so did the `np.interp` per-row
-# version this replaced. The ramp is flat past 9000 A in the notebook, in OpenUniverse's templates
-# and here, and no version of this module ever differed on it.
-IAX_WARP_ANCHORS_AA = (2350.0, 5200.0, 6000.0, 7500.0, 9000.0)
-IAX_WARP_KERNEL_CENTRE_DAYS = 15.0
-IAX_WARP_KERNEL_SIGMA_DEX = 0.2
-IAX_WARP_R_GAIN = 1.095  # the notebook's own factor, which keeps dm15(B) where the first warp put it
-IAX_PRE_EXPLOSION_SUPPRESSION = 2000.0
+# PISN IS STILL OUT, and now for a reason that is not about how rare it is. Its SEDs stop at
+# 20000 A rest-frame while F184's red edge is 21000, so PISN cannot cover F184 without
+# extrapolating below z = 0.050 -- and this sample's grid starts at z = 0.010. It cannot be
+# rendered in the bins the sample exists to fill. (Its residual is also 0.10-0.16 mag.)
+SLSN_SOURCE_NAME = "ou-slsn-2016apd"
+SLSN_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "data" / "openuniverse" / "slsn_template.npz"
 
-# Host extinction: the PARENT'S OWN screen, `AV` and `RV` straight out of the catalogue. SN Iax is
-# the one class OpenUniverse dusts by hand -- RV is 3.1 for all 115 645 of them and AV runs between
-# SNANA's generation limits of 0.001 and 3.0 -- and this module used to reproduce that distribution
-# by fitting it, which is now unnecessary: the object being re-rendered carries the screen it was
-# given. See the host extinction block below for why no other class gets one.
-
-# --- TDE (RETAINED, NOT GENERATED) ---------------------------------------------------------------
-# Not in CLASS_FRACTION and not in PARENT_GENTYPES: MOSFiT standing in for an SED OpenUniverse never
-# published is an added source rather than a moved one, and it measured 0.19 mag off with a colour
-# trend. See NO SUBSTITUTIONS in the module docstring. Kept below, with its tests, for the same
-# reason as SN Iax.
-# OpenUniverse took its TDE from the observed SED of AT2019qiz, which is not published as a usable
-# template, so this is a declared substitution: the MOSFiT `tde` model of Guillochon et al. (2018),
-# the same model Hourglass uses. It is also the safest extrapolation in this module. Every other
-# class reaches the rest-frame near-infrared through a template that was extended there by fiat;
-# the MOSFiT TDE is a blackbody photosphere, so at these wavelengths it is the Rayleigh-Jeans tail
-# of a body whose temperature the model tracks -- nothing is being extrapolated at all.
+# --- TDE -----------------------------------------------------------------------------------------
+# OpenUniverse's OWN TDE SED, read out of its published release.
 #
-# `data/tde/mosfit_tde_photospheres.npz` holds only the photosphere history (phase, temperature,
-# radius, luminosity for each of the 227 draws that survive the population cut below), not a sampled
-# spectrum: the Planck function is built from it on demand, which turns hundreds of megabytes of
-# SED cube into 113 kB. Regenerated by
-# `scripts/build_tde_templates.py`, which has to run in a separate environment -- MOSFiT pins
-# numpy <= 1.26.4 and cannot be installed next to the pipeline.
+# This was the module's largest declared substitution: OpenUniverse took its TDE from the observed
+# SED of AT2019qiz, which was believed unpublished, so the MOSFiT `tde` model of Guillochon et al.
+# (2018) stood in for it and measured 0.19 mag off with a colour trend. `MODELS-1_TRANSIENT_SED.tar`
+# ships `NON1ASED.TDE-BBFIT/2019qiz.sed`, a blackbody fit to the Swift and ground-based photometry
+# of Nicholl et al. (2020) and Hung et al. (2021). The substitution is gone.
 #
-# The draws are NOT MOSFiT's priors as they come. Those are fitting priors, deliberately
-# uninformative: drawn blind they put the peak photosphere temperature anywhere between 5e2 and
-# 1e6 K, and only a third of them land where TDEs are actually observed. The physics is MOSFiT's;
-# the population is cut to the observed peak temperature range of optically selected TDEs from
-# van Velzen et al. (2021), which the build script applies and records.
-TDE_SOURCE_NAME = "mosfit-tde"
-TDE_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "data" / "tde" / "mosfit_tde_photospheres.npz"
-# A blackbody has no structure to resolve, so the grid only has to be fine enough for the band
-# integration, and wide enough to cover R062 through F184 at the lowest redshift generated.
-# 100 A rather than the 20 A this started at: measured against the 20 A grid the six Roman
-# magnitudes move by less than 1e-7 mag, and the coarser grid is what makes caching the whole
-# template bank affordable (see `tde_source`).
-TDE_WAVELENGTH_LIMITS = (1000.0, 30000.0)
-TDE_WAVELENGTH_STEP = 100.0
+# ONE TEMPLATE, and OpenUniverse drew exactly that: all 3769 of its TDEs carry `template_index` 1.
+# So every TDE this module generates has the same SED, differing only in luminosity, redshift and
+# where the cadence falls -- which is a property of the release and not a simplification here.
+#
+# THE FLUX IS ABSOLUTE and is used as such. The file's own header says
+# "flux: erg/s/cm^2/A scaled to 10 pc", and measured against OpenUniverse's own photometry over 60
+# parents the absolute magnitude it implies is 0.10 mag from the one OpenUniverse gave them. Unlike
+# the core-collapse templates, nothing has to be applied on top.
+TDE_SOURCE_NAME = "ou-tde-2019qiz"
+TDE_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "data" / "openuniverse" / "tde_template.npz"
 
 # --- SN Ia -------------------------------------------------------------------------------------
-# One SALT source at every redshift, which took a measurement to get to.
+# OpenUniverse's OWN SALT3 model, read out of its published release rather than approximated.
 #
-# OpenUniverse's SN Ia model is SALT3 extended into the near-infrared -- Pierel et al. (2022), which
-# sncosmo ships as `salt3-nir`. Using it matters: against the 68 SN Ia OpenUniverse has below
-# z = 0.1, the median Z087-Y106 of a matched sample sits 0.180 mag blue of them with
-# `salt2-extended` and 0.080 mag blue with `salt3-nir`, so the switch removes more than half of a
-# systematic colour offset in the largest single class of the sample.
+# OpenUniverse's SN Ia model is SALT3 extended into the near-infrared -- Pierel et al. (2022) --
+# and `MODELS-1_TRANSIENT_SED.tar` ships it as `SALT3.NIR_WAVEEXT`, vendored here. sncosmo's stock
+# `salt3-nir` IS that model over the range they share: measured surface against surface with
+# x1 = c = 0, the two agree to a scale of 1.0000 and a median residual of 0.0000. What the release
+# adds is the wavelength range, 2000-25000 A rest-frame against sncosmo's 2000-20000.
 #
-# `salt3-nir` stops at 20000 A rest-frame and the red edge of F184 is at 21000 A, so it covers the
-# band only above z = 0.05 exactly. This module used to fall back to `salt2-extended` below that,
-# which reaches 24990 A -- one class carrying two spectral models, split at a redshift.
+# THAT RANGE IS WHY THIS REPLACED A PAD. F184's red edge is at 21000 A and `salt3-nir` stops at
+# 20000, so this module used to hold its last defined flux constant over the missing 1000 A. The
+# release covers them with the model itself.
 #
-# `scripts/compare_ia_salt_sources.py` measures what that fallback costs, by putting both sources
-# under the same CSP-I photometry with the same drawn population: same x1, same colour, same drawn
-# peak absolute magnitude, so the two models are the same supernova and differ only in the shape
-# that carries it into the near-infrared. On the decline rate m(+15 d) - m(max) -- which no
-# distance and no host dust can move -- `salt2-extended` is too slow by 0.217, 0.242 and 0.351 mag
-# in Y, J and H, and `salt3-nir` by 0.077, 0.035 and 0.134. Every supernova improves: 14 of 14 in
-# Y, 12 of 12 in J, 9 of 9 in H.
+# WHAT THAT IS WORTH, measured against the pad it replaces: F184 alone, below z = 0.05 alone, and
+# -0.022 mag at z = 0.01, -0.019 at z = 0.02, -0.011 at z = 0.03, -0.002 at z = 0.05, 0.000 above.
+# Every other band is 0.0000 at every redshift. Small, but NOT the 0.00001 mag this block used to
+# predict for it: that number compared the pad against continuing `salt2-extended`'s fall, and the
+# real model over those 1000 A does neither.
 #
-# So the fallback is removed and `salt3-nir` is held flat over the 1000 A it is missing. That is an
-# extrapolation, and it is bounded: F184 is a filter, not a top hat, and its throughput is already
-# below 1 % of peak past 2054 nm. The fraction of the F184 photon response redward of 20000 A
-# rest-frame is 0.143 % at z = 0.02 -- the reddest rest-frame this module ever samples -- 0.013 %
-# at z = 0.03 and zero above z = 0.05. Measured through this module's own path, deleting that
-# sliver outright moves the peak F184 magnitude by 0.0013 mag at z = 0.02 and 0.0001 mag at
-# z = 0.03. What goes in it matters even less: held flat against continued along the fall
-# `salt2-extended` shows over those 1000 A -- about 12 % -- the two differ by 0.00001 mag. Flat,
-# because flat is the one rule that cannot amplify a slope read off the edge of a spline.
+# IT DOES NOT EXPLAIN THE SN Ia RESIDUAL, and the obvious guess was wrong. SN Ia is the worst class
+# of the band-to-band residual against OpenUniverse's own photometry -- 0.039 mag against 0.006 for
+# SN Ib and SN Ic -- and being the one class whose template was not read from the release made the
+# pad the suspect. Measured over 400 SN Ia parents the residual is IDENTICAL to four decimals with
+# either source, because that measurement renders at the PARENT's redshift, which is high, where
+# F184 in the rest frame sits far inside sncosmo's ceiling. The pad only ever acted at the drawn
+# redshift. Whatever makes SN Ia the worst class is still unexplained.
 #
-# The extrapolation is confined to the SED. `spectrum_to_roman_magnitudes` still reads coverage off
-# the nominal band edge and is untouched, and so is the coverage test that forbids extrapolation --
-# the padded source passes it the way any other source does, by reaching 21000 A.
-IA_BASE_SOURCE_NAME = "salt3-nir"
-IA_SOURCE_NAME = "salt3-nir-f184"
-IA_PAD_WAVELENGTH = 21000.0  # A rest-frame; the red edge of F184, reached at z = 0
+# `SALT3.INFO` also carries `SIGMA_INT: 0.106  # used in simulation`, which is NOT the 0.21 mag of
+# grey scatter this module measures in OpenUniverse's SN Ia photometry (see REFERENCE_ABSOLUTE_
+# MAGNITUDE). The two are not the same number and the difference is not understood; nothing here
+# uses either, because the SN Ia brightness is measured off the parent light curve.
+IA_SOURCE_NAME = "salt3-nir-ou"
+IA_BASE_SOURCE_NAME = "salt3-nir"  # sncosmo's, kept only so the test can compare against it
+IA_MODEL_PATH = Path(__file__).resolve().parents[3] / "data" / "openuniverse" / "salt3_nir_waveext"
 
-# THE CORE-COLLAPSE LIBRARY, read out of OpenUniverse's own light-curve release rather than
-# reconstructed. `scripts/build_openuniverse_cc_templates.py` builds the archive and its docstring
-# carries the provenance; this block carries what a reader of the module needs.
+# THE CORE-COLLAPSE LIBRARY, read out of OpenUniverse's own published models.
+# `scripts/build_openuniverse_cc_templates.py` builds the archive and its docstring carries the
+# provenance; this block carries what a reader of the module needs.
 #
-# OpenUniverse drew its core-collapse SEDs from `NON1ASED.V19_CC+HostXT_WAVEEXT`. The base half of
-# that name is public and the `_WAVEEXT` half -- the near-infrared extension -- is not, and 11000 A
-# rest-frame covers Roman only above z = 0.91, the opposite of the range this sample fills. The
-# previous answer was to redo the extension with `snsedextend`, the public implementation of the
-# method OpenUniverse cites. Measured against OpenUniverse's own photometry that failed: it made a
-# comb of one hump per photometric anchor separated by runs of zero flux, worth a factor 0 to 3.7
-# against theirs over 11000-20600 A, and a colour that swung 2 mag across the sample's redshift
-# range where OpenUniverse's is flat.
+# OpenUniverse drew its core-collapse SEDs from `NON1ASED.V19_CC+HostXT_WAVEEXT` -- Vincenzi et al.
+# (2019) corrected for host extinction, extended to 25000 A by the methods of Pierel et al. (2018)
+# -- and publishes that library in full, at https://zenodo.org/records/14749318. The `.SED` files
+# are read directly. The 3.77 GB tar they come in is NOT a dependency of the pipeline: the script
+# is run by hand and this 23 MB archive is what gets versioned.
 #
-# None of that reconstruction was necessary, because the templates are IN the release. Each
-# object's hdf5 group carries `flambda`, the model SED itself, on a fixed observer-frame grid of
-# 1850-24450 A, and every object of one `template_index` is one rest-frame template at a different
-# redshift -- so dividing by (1 + z) recovers it. Below z = 0.187 an object reaches 20600 A rest,
-# which is F184's red edge at this sample's own z = 0.02 floor.
+# TWO EARLIER ANSWERS ARE GONE, and what they cost is why the release is worth trusting over
+# either. The first redid the near-infrared extension with `snsedextend`, the public implementation
+# of the method OpenUniverse cites; measured against OpenUniverse's own photometry it made a comb
+# of one hump per photometric anchor separated by runs of zero flux. The second recovered the
+# templates out of the per-healpix light-curve files, where each object's `flambda` is the model
+# SED itself at that object's redshift -- sound, and validated to 0.5 %, but it could only use
+# objects below z = 0.187 (the observer-frame grid ends at 24450 A) and each template covered only
+# the phases its objects' light curves sampled.
 #
-# THREE MEASUREMENTS SAY THIS IS SOUND, and they are why the archive is trusted rather than fitted:
-#   * Objects of one template at z = 0.081, 0.991 and 1.501, de-redshifted and normalised, agree to
-#     0.5 % median over 2500-8000 A -- across a factor 15 in (1 + z).
-#   * Over the 44 templates, the 10 to 12 independent objects combined into each agree to between
-#     0.04 % and 1.05 %. That is the check that the de-redshifting and the phase alignment held.
-#   * The PUBLIC pycoco base reproduces the extracted template to 1.3-1.4 % over 3000-10000 A on
-#     the templates whose phase convention lines up. It is the control on everything else: the
-#     library identification, the flux convention and the de-redshifting are all confirmed by it,
-#     and what was wrong was only ever our own extension.
+# THE MIGRATION WAS MEASURED, not assumed (docs/plan_templates_oficiales_ou.md):
+#   * Against the recovered archive, allowing the phase offset and the achromatic scale that
+#     `peak_phase` and `set_source_peakabsmag` absorb anyway, all 44 templates agree to a median of
+#     0.3 % and a worst of 2.3 %. They are the same SEDs.
+#   * Over 132 fixed parents the inferred brightness moves by 0.003 mag, and the band-to-band
+#     residual against OpenUniverse's OWN photometry -- the one number that says whether this
+#     pipeline reproduces the release -- improves from 0.0084 to 0.0079 mag.
 #
-# WHAT THE ARCHIVE HOLDS: 44 templates, 3000-20600 A rest-frame, and a phase grid PER TEMPLATE.
-# The phase axis is not shared because `peak_mjd` is OpenUniverse's own per-object peak, and for a
-# SN II that sits at the start of the plateau, essentially at explosion -- so there is almost no
-# light curve before it. Every SN Ib reaches -12 d; SN IIP and SN IIL reach a median of -3 and some
-# only 0. A window shared by all of them would have to start at 0 and throw away the rise for the
-# classes that have one. THIS IS A LIMITATION OF THE SIMULATION, NOT OF THE PIPELINE, and it
-# belongs in the paper: a SN II contaminant reaches the classifier without its rise because
-# OpenUniverse's model does not have one.
+# HOST EXTINCTION IS ZERO and that is deliberate. OpenUniverse's release note says, of its own
+# simulation: "for the SNCC (II/Ib/Ic) models we mistakenly used the de-reddened SEDs and therefore
+# did not model host extinction". These are those de-reddened SEDs. Reproducing the bug is the
+# requirement; a sample that fixed it would differ from the release in a way correlated with class.
+#
+# WHAT THE ARCHIVE HOLDS: 44 templates on the files' OWN wavelength grid, 1605-25000 A rest-frame,
+# and a phase grid PER TEMPLATE spanning -78 to +272 d, a median of 198 d each. Measured off the
+# .npz on disk. An earlier version of this comment described the archive this one replaced --
+# 3000-20600 A and a (-12, +35) d trim inherited from the recovered templates -- and kept saying so
+# after the migration; the trim and the ceiling are gone, see the build script for why each went.
+# The phase axis is not shared because the templates begin where their original spectroscopy did,
+# which for a SN IIP is close to explosion and for a SN Ib is well before maximum.
 OPENUNIVERSE_ARCHIVE_PATH = Path(__file__).resolve().parents[3] / "data" / "openuniverse" / "cc_templates.npz"
 OPENUNIVERSE_SOURCE_PREFIX = "ou-"
 
@@ -407,8 +345,9 @@ OPENUNIVERSE_SOURCE_PREFIX = "ou-"
 # reddest edges included. tests/test_intermediate_z_contaminants.py re-checks this against sncosmo
 # rather than trusting the list.
 #
-# The core-collapse entries are OpenUniverse's OWN templates, read out of its light-curve files by
-# `scripts/build_openuniverse_cc_templates.py`; see the OPENUNIVERSE_ARCHIVE_PATH block above.
+# The core-collapse entries are OpenUniverse's OWN templates, read out of its published model
+# release by `scripts/build_openuniverse_cc_templates.py`; see the OPENUNIVERSE_ARCHIVE_PATH
+# block above.
 #
 # THEY ARE 44, AND THAT IS EVERY ONE OPENUNIVERSE DREW -- the count is not a survival rate. Nothing
 # was cut here: the release's own `template_index` says which of the library's templates each
@@ -481,11 +420,13 @@ SOURCES_BY_LABEL = {
     ],
     # Not a registry name until `_sncosmo()` registers it either; see IA_SOURCE_NAME.
     "SN Ia": [IA_SOURCE_NAME],
-    # Not a registry name until `_sncosmo()` registers it; see IAX_SOURCE_NAME.
-    "SN Iax": [IAX_SOURCE_NAME],
-    # Likewise, and a stand-in for the whole bank: `build_model` builds the template the parent's
-    # own id selects.
+    # ONE NAME STANDS FOR THE 919-TEMPLATE BANK, and that is sound here because the coverage check
+    # is about the grid: every SN Iax template shares one phase and one wavelength axis, verified
+    # when the archive is built. `build_model` builds the one the parent's `template_index` names.
+    "SN Iax": [IAX_SOURCE_NAME_PREFIX + "0"],
+    # One template each, which is what OpenUniverse drew for both.
     "TDE": [TDE_SOURCE_NAME],
+    "SLSN-I": [SLSN_SOURCE_NAME],
 }
 
 # UNIFORM BY CLASS, ON PURPOSE. This is not OpenUniverse's mix and is not meant to be: it is a
@@ -506,23 +447,23 @@ SOURCES_BY_LABEL = {
 # The SN II subtypes are split among themselves by volumetric fraction (Li et al. 2011) rather than
 # uniformly -- that split is a property of the class, not a choice about class balance, and
 # OpenUniverse pools all three into one label the classifier never sees separated.
-UNIFORM_CLASS_SHARE = 1.0 / 4.0
-# Measured off OpenUniverse's own template set rather than taken from Li et al. (2011): of the 24
-# SN II templates it drew, 17 are SNTYPE 20 and 7 are SNTYPE 22. The volumetric split this used to
-# carry was a stand-in for exactly this number, and the number is now readable.
-SN_II_SUBTYPE_FRACTION = {"SN IIP": 17.0 / 24.0, "SN IIL": 7.0 / 24.0}
+# ONE SHARE PER LABEL, and eight of them. This was 1/4 over CLASSES -- SN Ia, SN Ib, SN Ic and a
+# SN II split into IIP and IIL by 17/24 and 7/24, the proportion of templates OpenUniverse drew --
+# which gave core-collapse 75 % of the sample. Uniform over labels gives it 57 % and puts SN Iax,
+# TDE and SLSN-I on the same footing as the rest.
 #
-# SN Iax and TDE are NOT here, and that is the sample's scope rather than an omission: every class
-# it generates has to be one whose spectral model is OpenUniverse's own, so that the sample is a
-# redistribution of OpenUniverse's population in redshift and nothing else. See PARENT_GENTYPES in
-# `openuniverse_parents` for what each of the two would have cost, and the SN Iax and TDE blocks
-# above for the models themselves, which are kept but no longer drawn.
+# The 17/24-7/24 split is gone with it. It came from OpenUniverse's own template counts, which is
+# the right thing to inherit when the goal is OpenUniverse's mix and irrelevant when it is not.
+UNIFORM_CLASS_SHARE = 1.0 / 8.0
 CLASS_FRACTION = {
-    "SN IIP": UNIFORM_CLASS_SHARE * SN_II_SUBTYPE_FRACTION["SN IIP"],
-    "SN IIL": UNIFORM_CLASS_SHARE * SN_II_SUBTYPE_FRACTION["SN IIL"],
     "SN Ia": UNIFORM_CLASS_SHARE,
-    "SN Ic": UNIFORM_CLASS_SHARE,
+    "SN Iax": UNIFORM_CLASS_SHARE,
     "SN Ib": UNIFORM_CLASS_SHARE,
+    "SN Ic": UNIFORM_CLASS_SHARE,
+    "SN IIP": UNIFORM_CLASS_SHARE,
+    "SN IIL": UNIFORM_CLASS_SHARE,
+    "SLSN-I": UNIFORM_CLASS_SHARE,
+    "TDE": UNIFORM_CLASS_SHARE,
 }
 
 # The subtypes all map back to OpenUniverse gentype 32, the class they stand in for. SN Iax (12)
@@ -535,6 +476,7 @@ GENTYPE_BY_LABEL = {
     "SN Ic": 26,
     "SN IIP": 32,
     "SN IIL": 32,
+    "SLSN-I": 40,
     "TDE": 42,
 }
 
@@ -619,6 +561,32 @@ SALT2_M0 = -19.363447  # at OPENUNIVERSE_H0; degenerate with it, see the cosmolo
 # axis, and it is the axis the parent's light curve is read on too, so both sides of the brightness
 # measurement span the same rest-frame phases.
 REST_FRAME_PHASES = np.arange(-20.0, 71.0, 1.0)
+REST_FRAME_PHASE_STEP = 1.0
+
+# ESTA VENTANA YA NO ES LA DE LA CURVA DE LUZ. Solo queda en `rendered_band_curves`, que existe para
+# comparar el brillo contra el del padre y tiene que medirse sobre las MISMAS fases que el padre
+# (`openuniverse_parents.PEAK_PHASE_LIMITS`, apareadas por test). La curva de luz que se renderiza
+# corre sobre toda la plantilla; ver `template_phase_grid`.
+
+
+def template_phase_grid(source):
+    """Toda la fase que la plantilla tiene, a `REST_FRAME_PHASE_STEP`, anclada en su primer punto.
+
+    RECORTAR AQUI COSTABA PLANTILLAS ENTERAS. Esto era `peak_phase(...) + REST_FRAME_PHASES`, o sea
+    una ventana de (-20, +70) d CENTRADA EN EL PICO. Una plantilla cuyo maximo llega tarde perdia su
+    parte temprana aunque la tuviera: `pycoco_SN2005bf` empieza en -42.65 d y se renderizaba desde
+    -22.5, `pycoco_SN1987A` empieza en -78.95 y se renderizaba desde -14. Medido sobre 986 objetos a
+    z>0.5, la cobertura de esas plantillas era 36% y 35% -- y con la plantilla entera es 100% en
+    ambas, 82% en `pycoco_SN2008D` y 89% en `pycoco_SN2011bm`. En las otras 40 no cambia nada: la
+    ventana ya alcanzaba el inicio del archivo.
+
+    El limite tardio tampoco hace falta. Ninguna epoca observada llega a +190 d, asi que el extremo
+    rojo del eje no se lee; recortarlo solo ahorraba fases que igual salen NaN mas abajo.
+
+    El paso se mantiene en 1 d, que es el de la plantilla en disco, para no interpolar de mas."""
+    first, last = float(source.minphase()), float(source.maxphase())
+    count = int(np.floor((last - first) / REST_FRAME_PHASE_STEP)) + 1
+    return first + np.arange(count) * REST_FRAME_PHASE_STEP
 # Observed-frame grid the spectrum is sampled on. The limits bracket R062 to F184 with room to
 # spare; the grid is intersected with each model's own validity range, because a source that does
 # not reach a Roman band should fail the coverage check inside `spectrum_to_roman_magnitudes` and
@@ -662,53 +630,42 @@ def _registry_source(source_name):
     return _sncosmo().get_source(source_name)
 
 
-def _padded_ia_source():
-    """`salt3-nir` with its last defined flux held constant out to IA_PAD_WAVELENGTH.
+def _official_ia_source():
+    """OpenUniverse's own SALT3, read from IA_MODEL_PATH.
 
-    See the IA_SOURCE_NAME block for what the pad is worth and why it is flat. The mechanics: a
-    SALT source carries its spectral surfaces as two bicubic interpolators over (phase, rest-frame
-    wavelength) -- M0 and M1, the mean SED and the x1 derivative -- and `SALT2Source._flux` reads
-    the wavelength range off those. The colour law is analytic and already extrapolates smoothly
-    past 20000 A, so only the surfaces need extending. Each is re-evaluated on its own grid, its
-    last wavelength column repeated across the pad, and rebuilt on the extended grid; below 20000 A
-    the result is the original to machine precision, which
-    `test_padded_ia_source_matches_the_base_below_the_pad` checks.
+    `sncosmo.SALT3Source` wants the model directory uncompressed and wants all eight files, the
+    variance and covariance surfaces included -- it reads them even though nothing here uses SALT's
+    error model -- which is why the vendored copy is 17 MB rather than 3.
 
-    `sncosmo.get_source` builds a new instance per call, so the object mutated here is this
+    `sncosmo.get_source` builds a new instance per call, so the object returned here is this
     module's own and the registry entry for `salt3-nir` is untouched."""
     import sncosmo
-    from sncosmo.salt2utils import BicubicInterpolator
 
-    source = sncosmo.get_source(IA_BASE_SOURCE_NAME)
-    step = float(source._wave[1] - source._wave[0])
-    pad = np.arange(source._wave[-1] + step, IA_PAD_WAVELENGTH + 0.5 * step, step)
-    wavelength = np.concatenate([source._wave, pad])
-    for surface_name, surface in list(source._model.items()):
-        values = surface(source._phase, source._wave)
-        held = np.repeat(values[:, -1:], len(pad), axis=1)
-        source._model[surface_name] = BicubicInterpolator(
-            source._phase, wavelength, np.concatenate([values, held], axis=1)
+    if not IA_MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"{IA_MODEL_PATH} is missing; it is SALT3.NIR_WAVEEXT out of OpenUniverse's "
+            "MODELS-1_TRANSIENT_SED.tar (zenodo.org/records/14749318), uncompressed"
         )
-    source._wave = wavelength
-    source.name = IA_SOURCE_NAME
-    return source
+    return sncosmo.SALT3Source(modeldir=str(IA_MODEL_PATH), name=IA_SOURCE_NAME)
 
 
 def _openuniverse_templates():
     """{source name: (phase, wavelength, flux)} of the OpenUniverse archive, read once.
 
-    The archive shares ONE wavelength axis across its templates and gives each its own phase grid,
-    because the phases come from the original pycoco SEDs and differ template to template while the
-    wavelengths come from snsedextend and do not.
+    The archive shares ONE wavelength axis across its templates -- the build resamples every
+    template onto it -- and gives each its own phase grid, because the templates begin where their
+    original spectroscopy did and that differs template to template.
 
-    Nothing is repaired on the way in. An earlier version interpolated across the interior
-    zero-flux gaps; it was removed, because reproducing OpenUniverse's method is the whole reason
-    these templates are extended here and patching the method's output is not reproducing it. It
-    also bought nothing measurable: filling moved F184 by 0.010 mag at z = 0.05 and by 0.000 in
-    every band at z >= 0.2, and it did not make the sources pass the audit either, since the left
-    edge of the gap is already 1.7e-18 against a row maximum of 4.8e-2 -- the fill drew an
-    exponential ramp up from nothing and sncosmo's bicubic spline rang a few parts in 10 000 below
-    zero across it."""
+    Nothing is repaired on the way in, and nothing is audited either. The interior zero-flux gaps
+    this used to interpolate across belonged to an extension made on this side with `snsedextend`;
+    the release's own templates have none, measured. The audit that policed them,
+    `defective_near_infrared_extension`, was removed on 2026-09-18 along with the tests that pinned
+    it: its sound test found zero gaps in all 44 templates, and its own docstring called its second
+    test unsound -- which is the one that still fired, on 37 of 44. It pruned nothing, because
+    SOURCES_BY_LABEL holds every template OpenUniverse drew. Its premise was that the near-infrared
+    extension is a degraded part of the model, and that is backwards: OpenUniverse generated the
+    release's core-collapse photometry FROM `NON1ASED.V19_CC+HostXT_WAVEEXT`, so the extension is
+    the model. See the BRIGHTNESS_REST_WAVELENGTH_LIMITS block."""
     global _OPENUNIVERSE_TEMPLATES
     if _OPENUNIVERSE_TEMPLATES is None:
         if not OPENUNIVERSE_ARCHIVE_PATH.exists():
@@ -733,18 +690,23 @@ def _openuniverse_templates():
 def _sncosmo():
     """sncosmo is only needed to generate, never to train or evaluate, so it stays a lazy import.
 
-    Registering the SN Iax base source here rather than at import time keeps `IAX_SOURCE_NAME`
-    resolvable through the ordinary `sncosmo.get_source` path -- including from the coverage test,
-    which is the point: the Iax source has to be checked against R062-F184 like every other one."""
+    Every class's source goes in, because `register_sources` promises the whole of
+    SOURCES_BY_LABEL is resolvable through the ordinary `sncosmo.get_source` path -- which is what
+    the coverage test needs: every source has to be checked against R062-F184 like every other."""
     import sncosmo
 
     if IA_SOURCE_NAME not in _REGISTERED_SOURCES:
-        sncosmo.register(_padded_ia_source(), IA_SOURCE_NAME, force=True)
+        sncosmo.register(_official_ia_source(), IA_SOURCE_NAME, force=True)
         _REGISTERED_SOURCES.add(IA_SOURCE_NAME)
-    if IAX_SOURCE_NAME not in _REGISTERED_SOURCES:
-        phase, wavelength, flux = _iax_base_sed()
-        sncosmo.register(sncosmo.TimeSeriesSource(phase, wavelength, flux), IAX_SOURCE_NAME, force=True)
-        _REGISTERED_SOURCES.add(IAX_SOURCE_NAME)
+    if IAX_SOURCE_NAME_PREFIX not in _REGISTERED_SOURCES:
+        # Marked registered before the source is built, because `iax_source` calls back into here.
+        # ONE template stands for the bank in the registry, and in the coverage check with it: all
+        # 919 share one phase and one wavelength grid, verified when the archive is built.
+        _REGISTERED_SOURCES.add(IAX_SOURCE_NAME_PREFIX)
+        sncosmo.register(iax_source(0), IAX_SOURCE_NAME_PREFIX + "0", force=True)
+    if SLSN_SOURCE_NAME not in _REGISTERED_SOURCES:
+        _REGISTERED_SOURCES.add(SLSN_SOURCE_NAME)
+        sncosmo.register(slsn_source(), SLSN_SOURCE_NAME, force=True)
     # Every OpenUniverse source at once rather than on demand. They come out of one archive, so the read is
     # shared, and `register_sources` promises the whole of SOURCES_BY_LABEL is resolvable.
     if OPENUNIVERSE_SOURCE_PREFIX not in _REGISTERED_SOURCES:
@@ -756,14 +718,12 @@ def _sncosmo():
         # and would otherwise recurse. The registry entry is the first template of the bank, which
         # stands for all of them in the coverage check: every template shares one wavelength grid.
         _REGISTERED_SOURCES.add(TDE_SOURCE_NAME)
-        sncosmo.register(tde_source(0), TDE_SOURCE_NAME, force=True)
+        sncosmo.register(tde_source(), TDE_SOURCE_NAME, force=True)
     return sncosmo
 
 
 _REGISTERED_SOURCES = set()
 _OPENUNIVERSE_TEMPLATES = None
-_IAX_BASE_SED = None
-_IAX_BANK = None
 
 
 def register_sources():
@@ -776,292 +736,40 @@ def register_sources():
     _sncosmo()
 
 
-# The audit that pruned SOURCES_BY_LABEL, kept as code rather than as a list so the test can
-# re-derive the decision from sncosmo instead of trusting a list someone typed once.
-NEAR_INFRARED_AUDIT_LIMITS = (9000.0, 21000.0)  # A rest-frame: where the extension takes over
-# A SWEEP, not one redshift, and that is a correction: this was 0.1 alone, "mid-range for this
-# sample", and at 0.1 the V19 sources show no inversion at all while at 0.2 and beyond they show a
-# severe one. A single redshift tests one alignment of the rest-frame artefacts with the bands and
-# reports it as if it were the template's whole behaviour.
-NEAR_INFRARED_AUDIT_REDSHIFTS = (0.05, 0.1, 0.2, 0.3, 0.5)
-NEAR_INFRARED_AUDIT_STEP = 50.0
-
-
-def defective_near_infrared_extension(source_name):
-    """Why a template's near-infrared extension is unusable; an empty list means it passes.
-
-    Both tests are mechanical and both are aimed at the EXTENSION rather than at the spectrum the
-    template was measured from. See the SOURCES_BY_LABEL block for what they found and what
-    removing the failures cost.
-
-    THE TWO TESTS ARE NOT EQUALLY SOUND, and the pruning of SOURCES_BY_LABEL rests on the first.
-    A partial zero-flux hole in the middle of a bandpass is not physics under any model. The
-    F184-brighter-than-H158 test is a heuristic instead: it assumes a smooth declining continuum,
-    and a source with real near-infrared structure can violate it honestly. `salt3-nir-f184` does,
-    at 52 of the sampled phases, because a SN Ia HAS a secondary near-infrared maximum -- and the
-    same source's measured colours against OpenUniverse's own SALT3 agree to 0.017 mag in all four
-    bands, which is what says the violation is the model and not a defect. Every SNANA template
-    fails the hole test on its own, at 42 to 84 of the 91 sampled phases, so nothing in the cut
-    depends on the heuristic.
-    """
-    sncosmo = _sncosmo()
-    source = _registry_source(source_name)
-    phase = float(source.peakphase("bessellb"))
-    reasons = []
-
-    blue = max(source.minwave(), NEAR_INFRARED_AUDIT_LIMITS[0])
-    red = min(source.maxwave(), NEAR_INFRARED_AUDIT_LIMITS[1])
-    rest_wavelength = np.arange(blue, red, NEAR_INFRARED_AUDIT_STEP)
-
-    models = []
-    for redshift in NEAR_INFRARED_AUDIT_REDSHIFTS:
-        model = sncosmo.Model(source=source)
-        model.set(z=redshift, t0=0.0)
-        observed_blue = max(model.minwave(), OBSERVED_WAVELENGTH_LIMITS[0])
-        observed_red = min(model.maxwave(), OBSERVED_WAVELENGTH_LIMITS[1])
-        models.append(
-            (redshift, model, _sampling_grid(observed_blue, observed_red, OBSERVED_WAVELENGTH_STEP))
-        )
-
-    # EVERY phase the module samples, not just maximum. Auditing at maximum alone is what the first
-    # version of this did, and it was close to arbitrary with respect to the defect: it removed
-    # templates broken at that one phase and kept templates equally broken twenty days later, so
-    # the pruned sample's colour residuals moved in directions that meant nothing. The colour
-    # statistic takes each band at ITS own maximum, which for the red bands is nowhere near B
-    # maximum, so a template only has to be sound where it is read.
-    for offset in REST_FRAME_PHASES:
-        epoch = phase + offset
-        if not (source.minphase() <= epoch <= source.maxphase()):
-            continue
-
-        # PARTIAL gaps only. A phase where the whole near-infrared is zero is the template before
-        # explosion or after it has faded, which is a fact about the source and not a hole in it.
-        if rest_wavelength.size:
-            rest_flux = source.flux(epoch, rest_wavelength)
-            if (rest_flux <= 0.0).any() and (rest_flux > 0.0).any():
-                reasons.append(f"zero-flux gap at {offset:+.0f} d")
-
-        for redshift, model, observed_wavelength in models:
-            flux = np.clip(model.flux(epoch * (1.0 + redshift), observed_wavelength), 0.0, None)
-            if flux.max() <= 0.0:
-                continue
-            magnitudes = spectrum_to_roman_magnitudes(observed_wavelength, flux)
-            # On the Rayleigh-Jeans side of any declining continuum an AB magnitude gets fainter
-            # towards the red, so a template whose F184 outshines its H158 is reporting the rising
-            # ramp its extension drew across the water bands.
-            if np.isfinite(magnitudes["F184"]) and np.isfinite(magnitudes["H158"]):
-                if magnitudes["F184"] < magnitudes["H158"]:
-                    reasons.append(f"F184 brighter than H158 at {offset:+.0f} d, z = {redshift:.2f}")
-    return reasons
-
-
-def _iax_base_sed():
-    """(phase, wavelength, flux) of SN 2005hk, processed exactly as `Iax-model.ipynb` cell 13.
-
-    Four steps in the notebook's order: resample the base SED onto IAX_NOTEBOOK_PHASES, smooth the
-    z/y region in phase from index 10 on, impose the late-time decline past
-    IAX_LATE_DECLINE_PHASE, and smooth everything from index 70 on. The z/y smoothing is the one
-    that matters most here: it runs over 8000-11000 A, which redshifts into Z087 and Y106 for
-    exactly the population this module generates."""
-    global _IAX_BASE_SED
-    if _IAX_BASE_SED is None:
-        # sncosmo directly, not `_sncosmo()`: that helper registers this very source and would
-        # recurse back into here.
-        import sncosmo
-        from scipy.ndimage import gaussian_filter
-
-        with np.load(IAX_BASE_SED_PATH) as archive:
-            base = sncosmo.TimeSeriesSource(
-                archive["phase"].astype(float),
-                archive["wavelength"].astype(float),
-                archive["flux"].astype(float),
-            )
-        phase = IAX_NOTEBOOK_PHASES
-        wavelength = IAX_NOTEBOOK_WAVELENGTHS
-        # Outside the base file's own -15 to +65 this is zero, which is what the notebook gets too.
-        original = sncosmo.Model(source=base).flux(phase, wavelength)
-        flux = np.copy(original)
-
-        wiggly = (wavelength >= IAX_SMOOTHED_WAVELENGTHS[0]) & (wavelength <= IAX_SMOOTHED_WAVELENGTHS[1])
-        smoothed = gaussian_filter(original, [IAX_SMOOTHING_SIGMA_PHASES, 0.0])
-        late = slice(IAX_SMOOTHED_FROM_INDEX, None)
-        flux[late, wiggly] = smoothed[late, wiggly]
-
-        declining = phase >= IAX_LATE_DECLINE_PHASE
-        flux[declining, :] *= np.exp(
-            -(phase[declining, None] - IAX_LATE_DECLINE_PHASE) / IAX_LATE_DECLINE_EFOLD
-        )
-        very_late = slice(IAX_LATE_SMOOTHED_FROM_INDEX, None)
-        flux[very_late, :] = gaussian_filter(flux, [IAX_SMOOTHING_SIGMA_PHASES, 0.0])[very_late, :]
-
-        _IAX_BASE_SED = (phase.copy(), wavelength.copy(), flux)
-    return tuple(array.copy() for array in _IAX_BASE_SED)
-
-
-def _iax_bank():
-    """The notebook's own 1001 rows of (M_V, t_rise, dm15B, dm15R), replayed from `seed(4)`.
-
-    Cells 1-12 of `Iax-model.ipynb`, in order, keeping every step that touches the random stream.
-    `np.random.seed` selects the legacy MT19937 generator, whose stream numpy guarantees across
-    versions, so this reproduces the published bank rather than a sample from the same laws.
-    Verified by the fraction brighter than M_V = -17.5, which the notebook prints as 0.2318."""
-    global _IAX_BANK
-    if _IAX_BANK is None:
-        from astropy import units
-        from astropy.cosmology import FlatLambdaCDM
-
-        table = pd.read_csv(IAX_JHA_TABLE_PATH)
-        redshift = table["z"].to_numpy(dtype=float)
-
-        state = np.random.RandomState(IAX_BANK_SEED)
-        grid = np.arange(*IAX_ABSOLUTE_MAGNITUDE_RANGE, IAX_ABSOLUTE_MAGNITUDE_STEP)
-        density = _iax_luminosity_function(grid)
-        cumulative = np.cumsum(density) * IAX_ABSOLUTE_MAGNITUDE_STEP
-        uniform_grid = np.arange(0.0, 1.0, IAX_INVERSE_CDF_STEP)
-        inverse_cdf = np.interp(uniform_grid, cumulative, grid)
-
-        absolute_v = np.interp(state.random_sample(IAX_BANK_DRAWN), uniform_grid, inverse_cdf)
-
-        # Cell 6: result discarded, random draws not. See IAX_REJECTION_MAGNITUDE_LIMIT.
-        hubble, matter_density = IAX_REJECTION_COSMOLOGY
-        modulus = (
-            5.0
-            * np.log10(FlatLambdaCDM(H0=hubble, Om0=matter_density).luminosity_distance(redshift) / units.Mpc)
-            + 25.0
-        )
-        for one_modulus in modulus:
-            while True:
-                trial = np.interp(state.random_sample(), uniform_grid, inverse_cdf)
-                if trial + one_modulus < IAX_REJECTION_MAGNITUDE_LIMIT:
-                    break
-
-        offset = absolute_v + 19.0
-        rise_time = (
-            21.0
-            - offset * 10.0 / 3.0
-            + 0.22 * offset**2
-            + state.normal(size=IAX_BANK_DRAWN) * IAX_RISE_TIME_SCATTER
-        )
-        decline_b = 1.2 + offset / 6.0 + state.normal(size=IAX_BANK_DRAWN) * IAX_DECLINE_B_SCATTER
-        decline_r = np.abs(0.5 + offset / 15.0 + state.normal(size=IAX_BANK_DRAWN) * IAX_DECLINE_R_SCATTER)
-        _IAX_BANK = tuple(array[:IAX_BANK_SIZE] for array in (absolute_v, rise_time, decline_b, decline_r))
-    return _IAX_BANK
-
-
-def _iax_luminosity_function(grid):
-    """Jha & Dai's phi(M_V), normalised to unit area; see IAX_ABSOLUTE_MAGNITUDE_RANGE."""
-    density = -(grid + 13.0) / 6.0 + 1.0
-    bright = grid < IAX_BRIGHT_ROLLOFF
-    density[bright] *= np.exp(-((grid[bright] - IAX_BRIGHT_ROLLOFF) ** 2) / 2.0 / IAX_BRIGHT_SIGMA**2)
-    faint = grid > IAX_FAINT_ROLLOFF
-    density[faint] *= np.exp(-((grid[faint] - IAX_FAINT_ROLLOFF) ** 2) / 2.0 / IAX_FAINT_SIGMA**2)
-    return density / (np.sum(density) * IAX_ABSOLUTE_MAGNITUDE_STEP)
-
-
-def iax_template(template_index):
-    """(M_V, rise time, dm15B, dm15R) of one bank row, indexed as OpenUniverse indexes it."""
-    bank = _iax_bank()
-    return tuple(float(array[template_index]) for array in bank)
-
-
-_TDE_TEMPLATES = None
-
-
-def _tde_templates():
-    """(phase, temperature, radius) of the MOSFiT photosphere bank, one row per drawn TDE."""
-    global _TDE_TEMPLATES
-    if _TDE_TEMPLATES is None:
-        with np.load(TDE_TEMPLATE_PATH) as archive:
-            _TDE_TEMPLATES = (
-                archive["phase"].astype(float),
-                archive["temperature"].astype(float),
-                archive["radius"].astype(float),
-            )
-    return _TDE_TEMPLATES
-
-
-def tde_template_count():
-    return len(_tde_templates()[1])
+@cache
+def _iax_grid():
+    """(phase, wavelength) shared by all 919 SN Iax templates; they are identical, verified."""
+    with np.load(IAX_TEMPLATE_PATH) as archive:
+        return archive["phase"].astype(float), archive["wavelength"].astype(float)
 
 
 @cache
-def tde_source(template_index):
-    """The blackbody spectrum of one drawn TDE photosphere, as an sncosmo source.
+def iax_source(template_index):
+    """One SN Iax template, as an sncosmo source, read from the archive on demand.
 
-    Cached over the whole bank rather than over a window of it. The draws are uniform over 227
-    templates, so the `lru_cache(maxsize=24)` this used to carry could not hold a working set and
-    measured no hits at all; the bank at TDE_WAVELENGTH_STEP costs 0.35 MB a template, so keeping
-    all of it is 79 MB and turns a 5 ms build into a lookup.
+    `template_index` is zero-based: OpenUniverse's catalogue carries 1 to 919 and the archive is
+    written in that order, so a caller subtracts one. Cached over the whole bank the way the TDE
+    bank used to be -- the draws are uniform over 919 templates, so a window cannot hold a working
+    set -- which at 0.45 MB a template is 415 MB if every one is drawn.
 
-    Flux is the real thing -- pi B_lambda(T(t)) (R(t) / 10 pc)^2 -- rather than a shape to be
-    rescaled later, so the source carries the brightness MOSFiT's physics implies. The sample does
-    not use it: a re-rendered TDE is normalised to its parent's own brightness like every other
-    class, and this bank supplies the colour and the shape of the light curve."""
-    from astropy import units
-    from astropy.modeling.models import BlackBody
-
+    The flux is absolute, erg/s/cm2/A at 10 pc, and `build_model` renormalises it."""
     sncosmo = _sncosmo()
-    phase, temperature, radius = _tde_templates()
-    wavelength = np.arange(*TDE_WAVELENGTH_LIMITS, TDE_WAVELENGTH_STEP) * units.AA
-    scale = 1.0 * units.erg / (units.cm**2 * units.AA * units.s * units.steradian)
-    ten_parsec = (10.0 * units.pc).to(units.cm)
-
-    # One BlackBody over the whole phase axis at once: per-phase objects cost 0.5 s a source, which
-    # at a sixth of the sample would dominate the entire generation.
-    # A handful of templates touch T = 0 at a single phase, where the model has no photosphere yet.
-    # The Planck function divides by zero there, so the flux is set to what it physically is.
-    one_temperature = temperature[template_index]
-    warm = one_temperature > 0.0
-    blackbody = BlackBody(temperature=np.where(warm, one_temperature, 1.0)[:, None] * units.K, scale=scale)
-    radiance = np.where(warm[:, None], blackbody(wavelength[None, :]).value, 0.0)
-    dilution = (radius[template_index] * units.cm / ten_parsec).decompose().value ** 2
-    return sncosmo.TimeSeriesSource(phase, wavelength.value, np.pi * radiance * dilution[:, None])
+    phase, wavelength = _iax_grid()
+    with np.load(IAX_TEMPLATE_PATH) as archive:
+        flux = archive[f"flux_{template_index}"].astype(float)
+    return sncosmo.TimeSeriesSource(phase, wavelength, flux)
 
 
-def iax_source(rise_time, decline_b, decline_r):
-    """The SN 2005hk SED warped to one (rise time, dm15B, dm15R), as `Iax-model.ipynb` cell 14.
-
-    Three warps in order: the pre-maximum phases are stretched to give the rise time, the post-
-    maximum flux is scaled by a log-normal kernel centred on day 15 to give dm15(B), and a second
-    kernel with a wavelength ramp gives dm15(R) while leaving dm15(B) where the first warp put it.
-    Amplitude is left alone -- `build_model` sets it from the template's own M_V."""
-    from scipy.interpolate import RectBivariateSpline
-
+@cache
+def slsn_source():
+    """OpenUniverse's SLSN-I SED, as an sncosmo source, read once. Absolute, at 10 pc."""
     sncosmo = _sncosmo()
-    phase, wavelength, flux = _iax_base_sed()
-
-    stretched = phase.copy()
-    pre_maximum = phase < 0.0
-    stretched[pre_maximum] *= rise_time / IAX_BASE_RISE_TIME
-    # Before the stretched explosion epoch the SED is suppressed rather than zeroed. Strict `<`,
-    # the notebook's own comparison: the grid starts at -30 d, so this selects the real region
-    # between -2 * rise_time and -rise_time and leaves the row at exactly -rise_time alone.
-    flux[stretched < -rise_time] /= IAX_PRE_EXPLOSION_SUPPRESSION
-    model = sncosmo.Model(source=sncosmo.TimeSeriesSource(stretched, wavelength, flux))
-
-    def decline(band):
-        return model.bandmag(band, "vega", 15.0) - model.bandmag(band, "vega", 0.0)
-
-    post_maximum = stretched > 1.0
-    kernel = np.zeros_like(stretched)
-    kernel[post_maximum] = np.exp(
-        -((np.log10(stretched[post_maximum]) - np.log10(IAX_WARP_KERNEL_CENTRE_DAYS)) ** 2)
-        / 2.0
-        / IAX_WARP_KERNEL_SIGMA_DEX**2
-    )
-
-    scale_b = 10.0 ** (-0.4 * (decline_b - decline("bessellb")))
-    flux = flux * (1.0 + (scale_b - 1.0) * kernel)[:, None]
-    model = sncosmo.Model(source=sncosmo.TimeSeriesSource(stretched, wavelength, flux))
-
-    scale_r = 10.0 ** (-0.4 * (decline_r - decline("bessellr")))
-    multiplier_b = np.ones_like(stretched)
-    multiplier_r = 1.0 + (scale_r - 1.0) * IAX_WARP_R_GAIN * kernel
-    anchored = np.array([multiplier_b, multiplier_b, multiplier_r, multiplier_r, multiplier_b])
-    # Linear in wavelength between the anchors and linearly EXTRAPOLATED past 9000 A, which is what
-    # `interp2d` did and what OpenUniverse's templates carry; see IAX_WARP_ANCHORS_AA.
-    ramp = RectBivariateSpline(np.asarray(IAX_WARP_ANCHORS_AA), stretched, anchored, kx=1, ky=1)
-    return sncosmo.TimeSeriesSource(stretched, wavelength, flux * ramp(wavelength, stretched).T)
+    with np.load(SLSN_TEMPLATE_PATH) as archive:
+        return sncosmo.TimeSeriesSource(
+            archive["phase"].astype(float),
+            archive["wavelength"].astype(float),
+            archive["flux_0"].astype(float),
+        )
 
 
 # --- The redshift the sample is generated at ----------------------------------------------------
@@ -1072,6 +780,22 @@ def iax_source(rise_time, decline_b, decline_r):
 # grid point per bin.
 DEFICIT_REDSHIFT_LIMITS = (0.01, 1.0)
 DEFICIT_REDSHIFT_NODES = 50
+
+
+@cache
+def tde_source():
+    """OpenUniverse's TDE SED, as an sncosmo source, read once.
+
+    Cached because it is read from disk and there is only ever one of it. The flux is absolute --
+    erg/s/cm2/A at 10 pc -- so the source carries the brightness AT2019qiz had, and `build_model`
+    renormalises it to whatever brightness the object is given."""
+    sncosmo = _sncosmo()
+    with np.load(TDE_TEMPLATE_PATH) as archive:
+        return sncosmo.TimeSeriesSource(
+            archive["phase"].astype(float),
+            archive["wavelength"].astype(float),
+            archive["flux_0"].astype(float),
+        )
 
 
 def deficit_bin_edges(limits=DEFICIT_REDSHIFT_LIMITS, nodes=DEFICIT_REDSHIFT_NODES):
@@ -1244,6 +968,9 @@ def realization_from_parent(parent, index, redshift, source_by_template_index, r
         "parent_key": str(parent["parent_key"]),
         "parent_healpix": int(parent["healpix"]),
         "parent_id": int(parent["id"]),
+        # La plantilla que OpenUniverse le dio. Va aqui porque el anclaje contra la ventana
+        # (`window_anchor`) busca su C por plantilla y solo tiene la realizacion en la mano.
+        "parent_template_index": int(parent["template_index"]),
         "parent_redshift": float(parent["redshift"]),
         "parent_peak_mjd": float(parent["peak_mjd"]),
         # Filled by `measure_brightness_offset`, from the parent's own light curve.
@@ -1270,28 +997,25 @@ def realization_from_parent(parent, index, redshift, source_by_template_index, r
         realization["salt2_c"] = float(parent["salt2_c"])
         realization["salt2_mB"] = float(parent["salt2_mB"])
     elif label == "SN Iax":
-        realization["source_name"] = IAX_SOURCE_NAME
-        # OpenUniverse's `template_index` runs 1..919 over the bank the notebook drew and the bank
-        # is indexed from zero. See IAX_BANK_SIZE for how that mapping was verified.
+        # OpenUniverse's `template_index` runs 1..919 and the archive is written in that order, so
+        # the index here is zero-based. The release's own NON1A.LIST is off by one against what
+        # OpenUniverse actually used; the archive absorbs that, see the SN Iax block.
         iax_template_index = int(parent["template_index"]) - 1
-        _, rise_time, decline_b, decline_r = iax_template(iax_template_index)
+        if not 0 <= iax_template_index < IAX_BANK_SIZE:
+            raise ValueError(
+                f"SN Iax template_index {parent['template_index']} is outside the 1..{IAX_BANK_SIZE} "
+                "OpenUniverse shipped"
+            )
         realization["iax_template_index"] = iax_template_index
-        realization["iax_rise_time"] = rise_time
-        realization["iax_decline_b"] = decline_b
-        realization["iax_decline_r"] = decline_r
+        realization["source_name"] = IAX_SOURCE_NAME_PREFIX + str(iax_template_index)
     elif label == "TDE":
+        # Nothing is drawn: OpenUniverse has ONE TDE template and every one of its TDEs carries
+        # `template_index` 1. The MOSFiT bank this replaced needed a draw, and needed it to come
+        # from the parent's own id so that a parent re-rendered twenty times stayed one object.
         realization["source_name"] = TDE_SOURCE_NAME
-        # The one place a parent cannot supply the model: OpenUniverse's TDE is the observed SED of
-        # AT2019qiz and its `template_index` indexes a bank that was never published, so the MOSFiT
-        # template stands in. The parent still supplies the brightness and the group.
-        #
-        # Drawn from the PARENT'S OWN id rather than from the caller's generator, so that every
-        # re-rendering of one parent is the same TDE. Otherwise a parent re-rendered twenty times
-        # would be twenty different objects sharing one brightness, and the brightness measurement
-        # -- which renders the model at the parent's redshift -- could not be shared between them.
-        realization["tde_template_index"] = int(
-            np.random.default_rng(int(parent["id"])).integers(tde_template_count())
-        )
+    elif label == "SLSN-I":
+        # One template too: all 1122 of OpenUniverse's SLSN-I carry `template_index` 1.
+        realization["source_name"] = SLSN_SOURCE_NAME
     else:
         raise ValueError(f"gentype {gentype} is not a class this module re-renders")
     if np.isfinite(parent["host_av"]):
@@ -1342,18 +1066,61 @@ def draw_class_population(catalog, labels, redshifts, random_generator, source_b
 def rendered_band_curves(realization, redshift, cosmology=None):
     """{band: (phase, apparent AB magnitude)} of one realization's model at `redshift`.
 
-    The phase axis is the TEMPLATE'S OWN, which for every class here is also OpenUniverse's: its
-    `peak_mjd` is where the archive's phase grid was aligned, SALT puts phase zero at B maximum and
-    so does SNANA's peak for a SN Ia, and the SN Iax base SED is published with maximum at zero. So
-    this axis and `(mjd - peak_mjd) / (1 + z)` of the parent's own light curve are the same axis,
-    which is what makes an overlay of the two meaningful. `roman_light_curve` measures from B
-    maximum instead, because that is what the survey window needs.
+    The phase axis is the TEMPLATE'S OWN, and for the core-collapse sources it is NOT
+    OpenUniverse's. That used to be true and stopped being true with the move to the published
+    templates: the recovered archive was built by de-redshifting objects about `peak_mjd`, so its
+    phase zero WAS OpenUniverse's, while a `.SED` file carries the native V19 axis. Measured
+    against OpenUniverse's own stored SEDs over 43 templates, the two differ by a template-dependent
+    offset -- exactly zero for 10 of them, a median of -2 d and as much as -20 and +16 -- and once
+    that offset is allowed the SEDs agree to 1.0 % median. The offset is the convention, not an
+    error. SALT still puts phase zero at B maximum and so does the SN Iax base SED.
+
+    NOTHING HERE DEPENDS ON THAT, which is why the move was safe: the phases are measured from
+    `peak_phase`, the source's own B maximum, and the only caller of this function discards the
+    phase axis and keeps the magnitudes. An overlay of this against `(mjd - peak_mjd) / (1 + z)` of
+    the parent's light curve would be misaligned by that offset and nothing does one.
+    `roman_light_curve` also measures from B maximum, because that is what the survey window needs.
 
     A band the redshifted spectrum does not cover is absent; a phase the model has no flux at is
     NaN. Unlike `roman_light_curve` this does not require every band at every phase, does not drop
     colour discontinuities and does not enforce the model's flux floor: all three of those guard
     against magnitudes that are spuriously FAINT, which is what the window cares about and what a
     peak is unaffected by."""
+    source = source_of(realization)
+    phases = peak_phase(realization) + REST_FRAME_PHASES
+    phases = phases[(phases >= source.minphase()) & (phases <= source.maxphase())]
+    magnitudes_by_band = band_magnitudes_at_phases(realization, redshift, phases, cosmology)
+    return {
+        band: (phases, magnitudes)
+        for band, magnitudes in magnitudes_by_band.items()
+        if np.isfinite(magnitudes).any()
+    }
+
+
+def source_of(realization):
+    """The sncosmo source a realization renders through, without the model around it.
+
+    What `build_model` picks in its first six lines, needed on its own by the callers that only
+    want the template's phase range -- the anchoring checks `minphase` before it renders anything.""" 
+    if realization["label"] == "SN Iax":
+        return iax_source(realization["iax_template_index"])
+    if realization["label"] == "TDE":
+        return tde_source()
+    if realization["label"] == "SLSN-I":
+        return slsn_source()
+    return _registry_source(realization["source_name"])
+
+
+def band_magnitudes_at_phases(realization, redshift, phases, cosmology=None):
+    """{band: AB magnitudes} of one realization's model, sampled at `phases` and nowhere else.
+
+    `phases` are the TEMPLATE'S OWN axis, the same one `rendered_band_curves` returns and the one
+    `window_anchor` puts an observed epoch on. Split out of `rendered_band_curves` because the
+    anchoring reads the model at four phases and nothing else: rendering the whole
+    `REST_FRAME_PHASES` window to use 4 of its 91 points is 20 times the integrations for the same
+    answer. A phase the model has no usable flux at comes back NaN in every band, and a band the
+    redshifted spectrum does not reach comes back NaN at every phase -- neither is an error here,
+    both are for the caller to check."""
     model = build_model(dict(realization, redshift=float(redshift)), cosmology)
 
     blue = max(model.minwave(), OBSERVED_WAVELENGTH_LIMITS[0])
@@ -1362,22 +1129,14 @@ def rendered_band_curves(realization, redshift, cosmology=None):
         return {}
     wavelength = _sampling_grid(blue, red, OBSERVED_WAVELENGTH_STEP)
 
-    source = model.source
-    phases = peak_phase(realization) + REST_FRAME_PHASES
-    phases = phases[(phases >= source.minphase()) & (phases <= source.maxphase())]
     rows = []
-    for phase in phases:
+    for phase in np.asarray(phases, dtype=float):
         flux = np.clip(model.flux(phase * (1.0 + redshift), wavelength), 0.0, None)
         if flux.max() < PHOTOMETRY_FLOOR:
             rows.append(dict.fromkeys(ALL_ROMAN_BANDS, np.nan))
             continue
         rows.append(spectrum_to_roman_magnitudes(wavelength, flux))
-    curves = {}
-    for band in ALL_ROMAN_BANDS:
-        magnitudes = np.array([row[band] for row in rows])
-        if np.isfinite(magnitudes).any():
-            curves[band] = (phases, magnitudes)
-    return curves
+    return {band: np.array([row[band] for row in rows]) for band in ALL_ROMAN_BANDS}
 
 
 def rendered_peak_magnitudes(realization, redshift, cosmology=None):
@@ -1397,10 +1156,25 @@ def rendered_peak_magnitudes(realization, redshift, cosmology=None):
 
 
 # WHERE THE BRIGHTNESS IS MEASURED, in the REST frame of the parent. A band is only used if its
-# pivot wavelength, de-redshifted by the parent's own redshift, lands inside this window. Both
-# edges are where a template stops being a measurement: below 3500 A the archive's own blue edge is
-# at 3000 A and SALT3's ultraviolet is the least constrained part of it, and above 10000 A every
-# core-collapse template is `_WAVEEXT`, the extension rather than the pycoco base.
+# pivot wavelength, de-redshifted by the parent's own redshift, lands inside this window.
+#
+# THE WINDOW IS EMPIRICAL AND ITS CAUSE IS NOT ESTABLISHED. An earlier version of this comment
+# justified both edges by the template ceasing to be "a measurement" there -- SALT3's ultraviolet
+# being its least constrained part, and every core-collapse template above 10000 A being the
+# `_WAVEEXT` extension rather than the pycoco base. That reasoning is wrong for this pipeline, and
+# the red edge it produced is indefensible: OpenUniverse generated its own core-collapse light
+# curves FROM `NON1ASED.V19_CC+HostXT_WAVEEXT`, so the extension is not a degraded version of the
+# model, it IS the model, and there exists no un-extended variant that produced the release's
+# photometry. The criterion here is reproducing OpenUniverse, not physical realism (see
+# docs/ on the izc scope): where both sides integrate the same file, a badly constrained
+# rest-frame region is constrained identically badly on both, and cancels.
+#
+# What survives is the measurement below, and it is a real effect with an unexplained cause. Since
+# the SED is shared, the scatter cannot come from the SED: it has to come from the INTEGRATION --
+# galsim.roman's bandpasses against the kcor SNANA used, the zeropoint convention, or the 10 A
+# sampling grid. Until that is measured, the window stays as an empirical guard rather than as a
+# statement about the templates, and it is a candidate for removal: dropping the blue bands costs
+# exactly the objects whose parents sit at high redshift, which is where anchoring is hardest.
 #
 # THIS IS MEASURED, NOT ASSUMED. Per band, per object, against the median of that object's own
 # bands -- so a constant brightness error cancels and only the band-to-band disagreement is left --
@@ -1491,14 +1265,7 @@ def build_model(realization, cosmology=None, **model_keywords):
     if cosmology is None:
         cosmology = openuniverse_cosmology()
 
-    if realization["label"] == "SN Iax":
-        source = iax_source(
-            realization["iax_rise_time"], realization["iax_decline_b"], realization["iax_decline_r"]
-        )
-    elif realization["label"] == "TDE":
-        source = tde_source(realization["tde_template_index"])
-    else:
-        source = _registry_source(realization["source_name"])
+    source = source_of(realization)
     if "host_av" in realization:
         # Rest-frame, and appended to whatever the caller asked for rather than replacing it: the
         # Milky Way screen a caller attaches is a second, observer-frame effect on the same model.
@@ -1543,8 +1310,7 @@ def roman_light_curve(realization, cosmology=None):
 
     source = model.source
     phase_of_maximum = peak_phase(realization)
-    phases = phase_of_maximum + REST_FRAME_PHASES
-    phases = phases[(phases >= source.minphase()) & (phases <= source.maxphase())]
+    phases = template_phase_grid(source)
     # Every band has to span the SAME phases. `build_window_from_model` marks a band unobserved
     # when the model does not cover that epoch, so bands with different time coverage would leave a
     # `not observed` token in a slot the cadence did schedule -- a window with fewer than three
@@ -1834,20 +1600,36 @@ def measure_population_brightness(population, hdf5_path, cosmology=None):
     return unmeasured
 
 
-def run_izc_healpix(healpix, population, source_directory, tiers, shard_directory=None, cosmology=None):
+def run_izc_healpix(healpix, population, source_directory, tiers, shard_directory=None,
+                    cosmology=None, windows_directory=None):
     """Measure, render and window every object of one healpix.
 
     Returns ({tier: parquet shard path}, summary) when `shard_directory` is given and
     ({tier: windows}, summary) when it is not. The shards are how the full run survives its own
     size: 670 000 objects are 27 million rows over the two tiers, and holding them as DataFrames
     until the end needs more memory than this machine has. Each task writes its own and the parent
-    streams them together."""
-    hdf5_path = Path(source_directory) / f"snana_{healpix}.hdf5"
-    if hdf5_path.stat().st_size == 0:
-        # A cloud-storage placeholder reads as an empty file rather than as an error, which would
-        # silently produce a sample with no brightness at all. See docs/generate_datasets.md.
-        raise SystemExit(f"{hdf5_path} is empty; mark it available offline before running")
-    unmeasured = measure_population_brightness(population, hdf5_path, cosmology)
+    streams them together.
+
+    WHERE THE BRIGHTNESS COMES FROM is `windows_directory`. Given one, it is read off the parent's
+    own early window through `window_anchor` -- the analytic phase plus the frozen anchor table --
+    and `source_directory` is not touched at all. Given none, it is read off the parent's full
+    light curve in the release's hdf5, which is 16 GB per field on an external volume. The two
+    agree to 0.002 mag in median over 1320 objects; the difference that matters is that the first
+    one only knows the parents the survey detected."""
+    if windows_directory is not None:
+        from kilonova.simulation.window_anchor import measure_population_brightness_from_windows
+
+        unmeasured = measure_population_brightness_from_windows(
+            population, window_anchor_windows(windows_directory, healpix), cosmology=cosmology
+        )
+    else:
+        hdf5_path = Path(source_directory) / f"snana_{healpix}.hdf5"
+        if hdf5_path.stat().st_size == 0:
+            # A cloud-storage placeholder reads as an empty file rather than as an error, which
+            # would silently produce a sample with no brightness at all. See
+            # docs/generate_datasets.md.
+            raise SystemExit(f"{hdf5_path} is empty; mark it available offline before running")
+        unmeasured = measure_population_brightness(population, hdf5_path, cosmology)
     measurable = [one for one in population if one["brightness_bands"] > 0]
     results = build_izc_windows(measurable, tiers, cosmology)
 
@@ -1868,13 +1650,21 @@ def run_izc_healpix(healpix, population, source_directory, tiers, shard_director
     return output, summary
 
 
+def window_anchor_windows(windows_directory, healpix):
+    """Imported lazily and wrapped so that `window_anchor` can import this module, not the reverse."""
+    from kilonova.simulation.window_anchor import windows_by_parent
+
+    return windows_by_parent(windows_directory, healpix)
+
+
 _IZC_WORKER_STATE = {}
 
 
-def _izc_worker_initializer(source_directory, tiers, shard_directory):
+def _izc_worker_initializer(source_directory, tiers, shard_directory, windows_directory=None):
     _IZC_WORKER_STATE["source_directory"] = source_directory
     _IZC_WORKER_STATE["tiers"] = list(tiers)
     _IZC_WORKER_STATE["shard_directory"] = shard_directory
+    _IZC_WORKER_STATE["windows_directory"] = windows_directory
     register_sources()
 
 
@@ -1886,11 +1676,13 @@ def _izc_healpix_task(work_item):
         _IZC_WORKER_STATE["source_directory"],
         _IZC_WORKER_STATE["tiers"],
         _IZC_WORKER_STATE["shard_directory"],
+        windows_directory=_IZC_WORKER_STATE.get("windows_directory"),
     )
     return healpix, shards, summary
 
 
-def run_izc_tiers(population, source_directory, tiers, output_paths, workers=1, shard_directory=None):
+def run_izc_tiers(population, source_directory, tiers, output_paths, workers=1, shard_directory=None,
+                  windows_directory=None):
     """Generate the whole sample and write one parquet per tier. Returns (totals, per-tier summary).
 
     Ordered `imap` over the healpix in sorted order, not `imap_unordered`, so the row order of the
@@ -1927,11 +1719,13 @@ def run_izc_tiers(population, source_directory, tiers, output_paths, workers=1, 
         pool = context.Pool(
             workers,
             initializer=_izc_worker_initializer,
-            initargs=(str(source_directory), tuple(tiers), str(shard_directory)),
+            initargs=(str(source_directory), tuple(tiers), str(shard_directory),
+                      None if windows_directory is None else str(windows_directory)),
         )
         stream = pool.imap(_izc_healpix_task, work_items, chunksize=1)
     else:
-        _izc_worker_initializer(str(source_directory), tiers, str(shard_directory))
+        _izc_worker_initializer(str(source_directory), tiers, str(shard_directory),
+                                None if windows_directory is None else str(windows_directory))
         pool = None
         stream = (_izc_healpix_task(item) for item in work_items)
 

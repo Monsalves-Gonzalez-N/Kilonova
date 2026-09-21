@@ -8,20 +8,31 @@ kn-early-windows, then concatenates all fields into:
     {output_dir}/early_windows_wide.parquet
 
 object_id is prefixed with the snana_id (e.g. "snana_10307_12345678") to stay unique across
-fields. A snana_id column is added for traceability. Tiers are processed sequentially to
-bound peak memory (one tier in RAM at a time).
+fields. A snana_id column is added for traceability. Tiers are processed sequentially.
+
+EVERY FIELD IS WRITTEN AS ITS OWN SHARD and the tier is stitched from the shards, which is what
+makes `--workers` possible and bounds peak memory at the same time. Holding a whole tier in RAM
+took 13 GB and, worse, lost everything if the run died: there was no partial output at all.
+A shard that already exists is skipped, so an interrupted run resumes where it stopped.
+
+PARALLELISING IS SAFE because the noise is not drawn from a shared stream: `build_early_window`
+seeds it with `int(object_id)`, so a field gives the same rows whatever process renders it and in
+whatever order. Fields are independent -- one HDF5 each -- so the split is over files.
 """
 
 import argparse
 import glob
 import logging
 import os
+import shutil
 import time
 import traceback
+from multiprocessing import Pool
 from pathlib import Path
 
 import h5py
 import pandas as pd
+import pyarrow.parquet as pq
 
 from kilonova.config import load_paths, require
 from kilonova.log import setup_logging
@@ -30,31 +41,37 @@ from kilonova.simulation import early_windows
 logger = logging.getLogger(__name__)
 
 
-def process_tier(tier, hdf5_paths, limit_ou=None):
-    """One pass over all HDF5 files for a single tier -> list of window DataFrames."""
-    constants = early_windows.build_tier_constants(tier)
-    logger.info(
-        "[%s] bands=%s  noise_floor_variance: %s",
-        tier,
-        constants["bands"],
-        ", ".join(f"{band}={variance:.0f}" for band, variance in constants["noise_floor_variance"].items()),
-    )
+_TIER_CONSTANTS = {}
 
-    all_windows = []
-    total_detected = 0
-    tier_start = time.time()
 
-    for file_index, hdf5_path in enumerate(hdf5_paths, start=1):
-        snana_id = os.path.basename(hdf5_path).replace(".hdf5", "")
-        catalog_path = hdf5_path.replace(".hdf5", ".parquet")
-        if not os.path.exists(catalog_path):
-            logger.warning("[%s] no catalog parquet, skipping", snana_id)
-            continue
+def _constants(tier):
+    """`build_tier_constants` per process: it is the same for every field and not free to build."""
+    if tier not in _TIER_CONSTANTS:
+        _TIER_CONSTANTS[tier] = early_windows.build_tier_constants(tier)
+    return _TIER_CONSTANTS[tier]
 
+
+def shard_path(shard_dir, tier, snana_id):
+    return Path(shard_dir) / f"{tier}__{snana_id}.parquet"
+
+
+def process_field(payload):
+    """One HDF5 -> one shard parquet. Returns a row of the log, never raises into the pool."""
+    tier, hdf5_path, limit_ou, shard_dir = payload
+    snana_id = os.path.basename(hdf5_path).replace(".hdf5", "")
+    output = shard_path(shard_dir, tier, snana_id)
+    if output.exists():
+        return snana_id, None, None, 0.0, "ya estaba"
+
+    catalog_path = hdf5_path.replace(".hdf5", ".parquet")
+    if not os.path.exists(catalog_path):
+        return snana_id, 0, 0, 0.0, "sin catalogo parquet"
+
+    started = time.time()
+    try:
+        constants = _constants(tier)
         object_records = early_windows.collect_object_records(catalog_path, limit=limit_ou)
-        file_windows = []
-        file_start = time.time()
-
+        field_windows = []
         with h5py.File(hdf5_path, "r") as hdf5:
             for object_id, redshift, gentype in object_records:
                 if str(object_id) not in hdf5:
@@ -67,26 +84,95 @@ def process_tier(tier, hdf5_paths, limit_ou=None):
                 window = window.copy()
                 window["object_id"] = snana_id + "_" + window["object_id"].astype(str)
                 window["snana_id"] = snana_id
-                file_windows.append(window)
+                field_windows.append(window)
+        if not field_windows:
+            return snana_id, 0, len(object_records), time.time() - started, "sin detecciones"
+        # Escritura atomica: el shard aparece entero o no aparece, para que reanudar no lea un
+        # parquet a medias de una corrida que murio.
+        partial = output.with_suffix(".partial")
+        pd.concat(field_windows, ignore_index=True).to_parquet(partial, index=False)
+        partial.replace(output)
+        return snana_id, len(field_windows), len(object_records), time.time() - started, None
+    except Exception:
+        return snana_id, None, None, time.time() - started, traceback.format_exc()
 
-        n_detected = len(file_windows)
-        total_detected += n_detected
-        all_windows.extend(file_windows)
+
+def process_tier(tier, hdf5_paths, output_path, shard_dir, limit_ou=None, workers=1):
+    """Every field of one tier -> shards -> one parquet. True if the parquet was written."""
+    constants = early_windows.build_tier_constants(tier)
+    logger.info(
+        "[%s] bands=%s  noise_floor_variance: %s",
+        tier,
+        constants["bands"],
+        ", ".join(f"{band}={variance:.0f}" for band, variance in constants["noise_floor_variance"].items()),
+    )
+    Path(shard_dir).mkdir(parents=True, exist_ok=True)
+    payloads = [(tier, path, limit_ou, str(shard_dir)) for path in hdf5_paths]
+
+    tier_start = time.time()
+    total_detected = 0
+    failures = []
+
+    def record(index, result):
+        nonlocal total_detected
+        snana_id, n_detected, n_records, elapsed, note = result
+        if note and note not in ("ya estaba", "sin detecciones", "sin catalogo parquet"):
+            failures.append((snana_id, note))
+            logger.error("[%s] [%d/%d] %s FALLO:\n%s", tier, index, len(payloads), snana_id, note)
+            return
+        if n_detected is not None:
+            total_detected += n_detected
         logger.info(
-            "[%s] [%d/%d] %s: detected=%d/%d (%.0fs)",
+            "[%s] [%d/%d] %s: %s (%.0fs)",
             tier,
-            file_index,
-            len(hdf5_paths),
+            index,
+            len(payloads),
             snana_id,
-            n_detected,
-            len(object_records),
-            time.time() - file_start,
+            note if note else f"detected={n_detected}/{n_records}",
+            elapsed,
         )
 
+    if workers > 1:
+        with Pool(workers) as pool:
+            for index, result in enumerate(pool.imap_unordered(process_field, payloads), start=1):
+                record(index, result)
+    else:
+        for index, payload in enumerate(payloads, start=1):
+            record(index, process_field(payload))
+
+    if failures:
+        raise RuntimeError(f"[{tier}] {len(failures)} campos fallaron: {[one for one, _ in failures]}")
+
+    shards = sorted(Path(shard_dir).glob(f"{tier}__*.parquet"))
+    if not shards:
+        logger.warning("[%s] ningun shard producido, no se escribe nada", tier)
+        return False
+
+    # Se cose por row group en vez de concatenar en pandas: el tier entero en memoria era el pico
+    # de 13 GB, y aqui nunca hay mas de un shard cargado.
+    writer = None
+    rows = 0
+    try:
+        for shard in shards:
+            table = pq.read_table(shard)
+            if writer is None:
+                writer = pq.ParquetWriter(output_path, table.schema)
+            else:
+                table = table.cast(writer.schema)
+            writer.write_table(table)
+            rows += table.num_rows
+    finally:
+        if writer is not None:
+            writer.close()
     logger.info(
-        "[%s] all files done: total_detected=%d elapsed=%.0fs", tier, total_detected, time.time() - tier_start
+        "[%s] all files done: total_detected=%d shards=%d rows=%d elapsed=%.0fs",
+        tier,
+        total_detected,
+        len(shards),
+        rows,
+        time.time() - tier_start,
     )
-    return all_windows
+    return True
 
 
 def main(argv=None):
@@ -102,6 +188,17 @@ def main(argv=None):
         type=int,
         default=None,
         help="process only the first N transients per field (smoke tests)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="processes over which to split the fields of a tier (1 = sequential)",
+    )
+    parser.add_argument(
+        "--keep-shards",
+        action="store_true",
+        help="keep the per-field shards after stitching (default: delete them)",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     arguments = parser.parse_args(argv)
@@ -123,6 +220,9 @@ def main(argv=None):
     logger.info("output_dir : %s", output_dir)
     logger.info("HDF5 files : %d", len(hdf5_paths))
 
+    logger.info("workers    : %d", arguments.workers)
+    shard_dir = output_dir / ".early_windows_shards"
+
     total_start = time.time()
     for tier in ("deep", "wide"):
         output_path = output_dir / f"early_windows_{tier}.parquet"
@@ -131,16 +231,26 @@ def main(argv=None):
             continue
 
         try:
-            windows = process_tier(tier, hdf5_paths, limit_ou=arguments.limit_ou)
-            if not windows:
-                logger.warning("[%s] no windows produced, skipping write", tier)
+            written = process_tier(
+                tier,
+                hdf5_paths,
+                output_path,
+                shard_dir,
+                limit_ou=arguments.limit_ou,
+                workers=arguments.workers,
+            )
+            if not written:
                 continue
-            combined = pd.concat(windows, ignore_index=True)
-            combined.to_parquet(output_path, index=False)
-            logger.info("[%s] -> %s rows=%d", tier, output_path, len(combined))
-            del combined, windows
+            logger.info("[%s] -> %s", tier, output_path)
+            if not arguments.keep_shards:
+                for shard in Path(shard_dir).glob(f"{tier}__*.parquet"):
+                    shard.unlink()
         except Exception:
+            # Los shards SOBREVIVEN a un fallo a proposito: relanzar reanuda donde quedo.
             logger.error("[%s] ERROR:\n%s", tier, traceback.format_exc())
+
+    if not arguments.keep_shards and shard_dir.exists() and not any(shard_dir.iterdir()):
+        shutil.rmtree(shard_dir)
 
     logger.info("DONE total=%.0fs", time.time() - total_start)
 

@@ -1,0 +1,5 @@
+outs:
+- md5: 8f7df9f8b303a570bdbd69cfffe6242f
+  size: 783958
+  hash: md5
+  path: slsn_template.npz

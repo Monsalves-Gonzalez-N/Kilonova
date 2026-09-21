@@ -12,6 +12,8 @@ both failures were silent enough to reach a pilot run:
     read. `test_first_epoch_always_has_three_observed_bands` pins it.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -20,33 +22,28 @@ from kilonova.simulation.intermediate_z_contaminants import (
     CLASS_FRACTION,
     GENTYPE_BY_LABEL,
     IA_BASE_SOURCE_NAME,
-    IA_PAD_WAVELENGTH,
     IA_SOURCE_NAME,
     IAX_BANK_SIZE,
+    IAX_TEMPLATE_PATH,
     IZC_GENTYPE_OFFSET,
     MAXIMUM_COLOUR_RATE,
     MODEL_FLUX_FLOOR_MAGNITUDE,
     REFERENCE_ABSOLUTE_MAGNITUDE,
     REST_FRAME_PHASES,
-    SN_II_SUBTYPE_FRACTION,
     SOURCES_BY_LABEL,
+    TDE_SOURCE_NAME,
     UNIFORM_CLASS_SHARE,
     _core_collapse_archive_order,
-    _iax_bank,
-    _iax_base_sed,
     _sampling_grid,
-    _tde_templates,
     apply_brightness_offset,
     build_izc_windows,
     build_model,
     core_collapse_source_by_template_index,
-    defective_near_infrared_extension,
     deficit_bin_edges,
     draw_class_population,
     draw_population_from_parents,
     draw_redshifts_from_deficit,
     iax_source,
-    iax_template,
     measure_brightness_offset,
     openuniverse_cosmology,
     redshift_deficit,
@@ -54,7 +51,6 @@ from kilonova.simulation.intermediate_z_contaminants import (
     rendered_peak_magnitudes,
     roman_light_curve,
     saturation_magnitude,
-    tde_template_count,
 )
 
 galsim = pytest.importorskip("galsim")
@@ -88,6 +84,7 @@ def synthetic_parent_catalog():
     rows.append({"gentype": 10, "label": "SN Ia", "template_index": 0})
     rows.append({"gentype": 12, "label": "SN Iax", "template_index": 42})
     rows.append({"gentype": 42, "label": "TDE", "template_index": 1})
+    rows.append({"gentype": 40, "label": "SLSN-I", "template_index": 1})
     for index, row in enumerate(rows):
         row["healpix"] = 10050
         row["id"] = 100000000 + index
@@ -97,8 +94,10 @@ def synthetic_parent_catalog():
         row["salt2_x1"] = 0.3
         row["salt2_c"] = -0.02
         row["salt2_mB"] = 24.0
-        row["host_av"] = 0.4 if row["gentype"] == 12 else np.nan
-        row["host_rv"] = 3.1 if row["gentype"] == 12 else np.nan
+        # AV != -9 for 100 % of SN Iax and SLSN-I in OpenUniverse, and for none of the rest.
+        screened = row["gentype"] in (12, 40)
+        row["host_av"] = 0.4 if screened else np.nan
+        row["host_rv"] = 3.1 if screened else np.nan
     return pd.DataFrame(rows)
 
 
@@ -123,25 +122,27 @@ def test_class_fraction_is_a_distribution():
 
 
 def test_class_fraction_is_uniform_over_the_openuniverse_classes():
-    """Equal share per class the classifier sees, with SN II split by subtype inside its own share.
+    """The sample generates the same number of every class, and it is a deliberate departure from
+    OpenUniverse's mix: anyone who "fixes" this back to volumetric fractions reintroduces the
+    low-redshift majority class the sample exists to avoid handing the model.
 
-    Pinned because it is a deliberate departure from OpenUniverse's mix: anyone who "fixes" this
-    back to volumetric fractions reintroduces the low-redshift majority class the sample exists to
-    avoid handing the model.
-
-    FOUR classes, not six. SN Iax and TDE are the two whose SED this side supplies rather than
-    moves, and generating them would make the sample an addition to OpenUniverse's population
-    instead of a redistribution of it -- see NO SUBSTITUTIONS in the module docstring."""
-    share_by_class = {}
-    for label, fraction in CLASS_FRACTION.items():
-        share_by_class.setdefault("SN II" if label in SN_II_SUBTYPE_FRACTION else label, 0.0)
-        share_by_class["SN II" if label in SN_II_SUBTYPE_FRACTION else label] += fraction
-    assert len(share_by_class) == 4
-    assert not {"SN Iax", "TDE"} & set(CLASS_FRACTION)
-    for label, share in share_by_class.items():
-        assert share == pytest.approx(UNIFORM_CLASS_SHARE, abs=1e-9), (label, share)
-    for subtype, fraction in SN_II_SUBTYPE_FRACTION.items():
-        assert CLASS_FRACTION[subtype] == pytest.approx(UNIFORM_CLASS_SHARE * fraction, abs=1e-9)
+    EIGHT labels, uniform. This was four CLASSES -- SN Ia, SN Ib, SN Ic and a SN II split into
+    IIP and IIL by the 17/24 and 7/24 of OpenUniverse's own template counts -- which handed
+    core-collapse 75 % of the sample. SN Iax, TDE and SLSN-I were out because their SED was a
+    substitution or absent, and all three now read OpenUniverse's own published model."""
+    assert set(CLASS_FRACTION) == {
+        "SN Ia",
+        "SN Iax",
+        "SN Ib",
+        "SN Ic",
+        "SN IIP",
+        "SN IIL",
+        "SLSN-I",
+        "TDE",
+    }
+    assert sum(CLASS_FRACTION.values()) == pytest.approx(1.0)
+    for label, share in CLASS_FRACTION.items():
+        assert share == pytest.approx(UNIFORM_CLASS_SHARE, abs=1e-12), (label, share)
 
 
 def test_every_generated_class_is_fully_specified():
@@ -163,38 +164,45 @@ def test_every_generated_class_is_fully_specified():
         assert np.isfinite(realization["peak_absolute_magnitude"]), realization["label"]
 
 
-def test_iax_bank_replays_the_published_templates():
-    """The bank is the notebook's own, not a resample of the same laws.
+def test_the_iax_bank_is_openuniverses_own_and_absolute():
+    """SN Iax stopped being a regeneration, and three things have to hold for that.
 
-    `Iax-model.ipynb` seeds `np.random.seed(4)` and prints "fraction brighter than -17.5: 0.2318"
-    for its 1001-object draw. Reproducing that number to the fourth decimal is what says the replay
-    is on the notebook's random stream -- the luminosity function alone would only reproduce it to
-    the sampling error of 1001 draws, which is 1.3 %."""
-    absolute_v, rise_time, decline_b, decline_r = _iax_bank()
-    assert len(absolute_v) == IAX_BANK_SIZE == 919
-    # Over the notebook's full 1001 draws; the bank keeps the 919 OpenUniverse shipped.
-    assert -20.0 <= absolute_v.min() and absolute_v.max() <= -11.0
-    assert np.median(absolute_v) == pytest.approx(-15.9815, abs=1e-3)
-    assert rise_time.min() > 0.0
-    assert (decline_r >= 0.0).all()
-    # The width-luminosity relations, which are the whole content of the model: a faint SN Iax
-    # rises faster and declines faster.
-    faint = absolute_v > -15.0
-    bright = absolute_v < -17.0
-    assert rise_time[bright].mean() > rise_time[faint].mean()
-    assert decline_b[bright].mean() < decline_b[faint].mean()
-    assert decline_r[bright].mean() < decline_r[faint].mean()
+    The bank has to be the 919 OpenUniverse shipped; every template has to share one grid, because
+    one of them stands for all 919 in the coverage check; and the flux has to be absolute -- the
+    files declare erg/s/cm2/A at 10 pc -- which means reading one straight gives an absolute
+    magnitude a SN Iax could have. The replay this replaced could not do the last one without being
+    renormalised, and it reproduced OpenUniverse's own photometry only to 0.19 mag with a 0.28 mag
+    colour trend."""
+    pytest.importorskip("sncosmo")
+
+    assert IAX_BANK_SIZE == 919
+    first = iax_source(0)
+    for index in (1, 459, IAX_BANK_SIZE - 1):
+        other = iax_source(index)
+        assert np.array_equal(other._phase, first._phase)
+        assert np.array_equal(other._wave, first._wave)
+    # SN 2008ha reached about -14 and SN 2002cx about -18.5; the bank spans that and no more.
+    magnitudes = [iax_source(i).peakmag("bessellb", "ab") for i in (0, 200, 459, 700, 918)]
+    assert -20.0 < min(magnitudes) and max(magnitudes) < -12.0
 
 
-def test_iax_template_index_matches_openuniverse():
-    """Row 0 of the replay is `template_index` 1 of the OpenUniverse catalogue.
+def test_the_iax_index_absorbs_the_releases_off_by_one():
+    """`NON1A.LIST` says `template_index` 1 is `SED-Iax-0001.dat`; OpenUniverse used
+    `SED-Iax-0000.dat`.
 
-    Verified against the catalogue itself rather than asserted: the dust-corrected peak absolute
-    LSST-g magnitude of the 1923 OpenUniverse SNe Iax below z = 0.45 tracks the replayed M_V with
-    slope +0.990 and correlation +0.983, where the same bank shuffled gives -0.022. These two rows
-    are the endpoints of that check."""
-    assert iax_template(0)[0] == pytest.approx(-12.8081, abs=1e-3)
-    assert iax_template(918)[0] == pytest.approx(-13.7112, abs=1e-3)
+    The archive is built with that shift applied, so a parent's `template_index` minus one indexes
+    it directly. The bank is a random draw per row, so neighbouring templates are unrelated and a
+    one-off error decorrelates completely rather than degrading gracefully -- it looks exactly like
+    OpenUniverse having overwritten the calibration, which is what a first pass of the measurement
+    concluded. Measured over 4357 parents on 40 templates: r = 0.998 with the shift, r = 0.055
+    without."""
+    pytest.importorskip("sncosmo")
+
+    with np.load(IAX_TEMPLATE_PATH) as archive:
+        files = [str(one) for one in archive["source_files"]]
+    assert len(files) == IAX_BANK_SIZE
+    assert files[0] == "SED-Iax-0000.dat"
+    assert files[-1] == f"SED-Iax-{IAX_BANK_SIZE - 1:04d}.dat"
 
 
 def test_the_brightness_offset_round_trips():
@@ -219,41 +227,11 @@ def test_the_brightness_offset_round_trips():
             )
             offset, spread, bands = measure_brightness_offset(realization, parent_peaks)
             assert bands >= 1, realization["label"]
-            assert offset == pytest.approx(
-                absolute_magnitude - REFERENCE_ABSOLUTE_MAGNITUDE, abs=1e-6
-            ), realization["label"]
+            assert offset == pytest.approx(absolute_magnitude - REFERENCE_ABSOLUTE_MAGNITUDE, abs=1e-6), (
+                realization["label"]
+            )
             if bands > 1:
                 assert spread == pytest.approx(0.0, abs=1e-6), realization["label"]
-
-
-# (rise time, dm15B, dm15R) asked for, and the dm15B/dm15R Iax-model.ipynb reports after warping.
-# Row one is the unwarped SN 2005hk SED, whose values the notebook prints as its inputs; it pins
-# the base SED and its z/y smoothing, not just the warp.
-IAX_NOTEBOOK_ROUND_TRIP = [
-    (15.0000, 1.61714, 0.118087, 1.61714, 0.118087),
-    (14.3271, 1.74331, 0.903555, 1.74642, 0.903997),
-    (8.6317, 2.37500, 0.791852, 2.37445, 0.791813),
-    (7.0824, 1.78634, 1.057413, 1.78982, 1.057959),
-    (10.8090, 1.62789, 0.916287, 1.63142, 0.916850),
-    (18.1049, 1.15467, 0.370067, 1.15796, 0.370559),
-]
-
-
-@pytest.mark.parametrize(
-    ("rise_time", "decline_b", "decline_r", "expected_b", "expected_r"), IAX_NOTEBOOK_ROUND_TRIP
-)
-def test_iax_warp_reproduces_the_published_model(rise_time, decline_b, decline_r, expected_b, expected_r):
-    """The warped SED has to land where Jha & Dai's own notebook lands, not merely somewhere.
-
-    This is what makes the izc SN Iax the same model as OpenUniverse's rather than a lookalike, and
-    it is the check that would catch a regression in the interp2d replacement (see
-    IAX_WARP_ANCHORS_AA) or in the base SED repacking."""
-    sncosmo = pytest.importorskip("sncosmo")
-    model = sncosmo.Model(source=iax_source(rise_time, decline_b, decline_r))
-    measured_b = model.bandmag("bessellb", "vega", 15.0) - model.bandmag("bessellb", "vega", 0.0)
-    measured_r = model.bandmag("bessellr", "vega", 15.0) - model.bandmag("bessellr", "vega", 0.0)
-    assert measured_b == pytest.approx(expected_b, abs=1e-3)
-    assert measured_r == pytest.approx(expected_r, abs=1e-3)
 
 
 def test_izc_gentypes_stay_separable_from_the_openuniverse_ones():
@@ -282,7 +260,7 @@ def test_listed_sources_exist_and_cover_the_roman_bands():
     sncosmo = pytest.importorskip("sncosmo")
     from kilonova.photometry.roman_noise import roman_bandpasses
 
-    register_sources()  # IAX_SOURCE_NAME is registered on demand, not at import
+    register_sources()  # the SN Iax, TDE and SLSN-I sources are registered on demand
     bandpasses = roman_bandpasses()
     lowest_redshift = 1.02
     required_blue = bandpasses["R062"].blue_limit * 10 / lowest_redshift
@@ -384,20 +362,20 @@ def test_izc_windows_carry_a_resolvable_label():
     population = draw_population(30, np.full(30, 0.06), random_generator)
     windows, _ = build_izc_windows(population, "deep")
     assert "UNKNOWN" not in set(windows["label"])
-    assert set(windows["label"]) <= {"SN Ia", "SN Iax", "SN Ib", "SN Ic", "SN II", "TDE"}
+    assert set(windows["label"]) <= {"SN Ia", "SN Iax", "SN Ib", "SN Ic", "SN II", "SLSN-I", "TDE"}
     assert set(windows["izc_subtype"]) <= set(CLASS_FRACTION)
 
 
 def test_type_ia_use_one_salt_source_at_every_redshift():
-    """The class used to carry two spectral models split at z = 0.05, because `salt3-nir` stops
-    1000 A short of the F184 red edge. Padding it removed the split; this pins that it stays
-    removed, and that the pad is long enough to cover F184 at every redshift, z = 0 included."""
+    """The class used to carry two spectral models split at z = 0.05, because sncosmo's `salt3-nir`
+    stops 1000 A short of the F184 red edge. OpenUniverse's own SALT3 reaches 25000 A; this pins
+    that the split stays removed and that the source covers F184 at every redshift, z = 0
+    included."""
     sncosmo = pytest.importorskip("sncosmo")
     from kilonova.photometry.roman_noise import roman_bandpasses
 
     register_sources()
     red_edge = roman_bandpasses()["F184"].red_limit * 10
-    assert IA_PAD_WAVELENGTH >= red_edge
     assert SOURCES_BY_LABEL["SN Ia"] == [IA_SOURCE_NAME]
     assert sncosmo.get_source(IA_SOURCE_NAME).maxwave() >= red_edge
 
@@ -409,19 +387,20 @@ def test_type_ia_use_one_salt_source_at_every_redshift():
         assert population[0]["source_name"] == IA_SOURCE_NAME, redshift
 
 
-def test_padded_ia_source_matches_the_base_below_the_pad():
-    """The pad is an extrapolation and has to stay confined to the 1000 A it was added for.
+def test_the_official_ia_source_is_sncosmos_salt3_nir_plus_range():
+    """OpenUniverse's SALT3 has to BE `salt3-nir` where the two overlap.
 
-    Below 20000 A the padded source has to BE `salt3-nir` -- not approximately, exactly -- because
-    that is what makes the pad a statement about the sliver of F184 nothing measures rather than a
-    change to the SN Ia model. Above it, held flat at the last defined value."""
+    That is what makes adopting it a statement about wavelength coverage rather than a change to
+    the SN Ia model, and it is what retires the flat pad this module used to carry over
+    20000-21000 A. Above 20000 A the official source has to have real, varying flux -- the whole
+    point is that the pad is gone."""
     sncosmo = pytest.importorskip("sncosmo")
 
     register_sources()
     base = sncosmo.get_source(IA_BASE_SOURCE_NAME)
-    padded = sncosmo.get_source(IA_SOURCE_NAME)
-    assert padded.maxwave() == IA_PAD_WAVELENGTH
-    assert (padded.minwave(), padded.minphase(), padded.maxphase()) == (
+    official = sncosmo.get_source(IA_SOURCE_NAME)
+    assert official.maxwave() > base.maxwave()
+    assert (official.minwave(), official.minphase(), official.maxphase()) == (
         base.minwave(),
         base.minphase(),
         base.maxphase(),
@@ -429,54 +408,51 @@ def test_padded_ia_source_matches_the_base_below_the_pad():
 
     phases = np.arange(base.minphase(), base.maxphase(), 3.0)
     inside = np.arange(base.minwave(), base.maxwave() + 1.0, 37.0)
-    assert padded.flux(phases, inside) == pytest.approx(base.flux(phases, inside), rel=0.0, abs=0.0)
+    shared = official.flux(phases, inside)
+    assert shared == pytest.approx(base.flux(phases, inside), rel=1e-10)
 
-    edge = base.flux(phases, np.array([base.maxwave()]))
-    for wavelength in (base.maxwave() + 250.0, IA_PAD_WAVELENGTH):
-        assert padded.flux(phases, np.array([wavelength])) == pytest.approx(edge, rel=1e-12)
-
-
-def test_tde_templates_are_a_population_not_a_prior():
-    """MOSFiT's priors are fitting priors: drawn blind they put the peak photosphere between 5e2
-    and 1e6 K and the peak luminosity between 1e38 and 1e45 erg/s, most of which is not a TDE. The
-    bank is cut to what is observed, and this pins that the cut survived the last rebuild."""
-    from astropy import constants
-
-    phase, temperature, radius = _tde_templates()
-    peak = int(np.argmin(np.abs(phase)))
-    assert len(temperature) > 100, len(temperature)
-    assert 1.4e4 < temperature[:, peak].min() and temperature[:, peak].max() < 5.1e4
-    luminosity = 4.0 * np.pi * radius[:, peak] ** 2 * constants.sigma_sb.cgs.value * temperature[:, peak] ** 4
-    assert 9e42 < luminosity.min() and luminosity.max() < 1.1e45
-    # A TDE photosphere is close to isothermal, which is what the observations show. Measured over
-    # the phases where the model has a photosphere at all: four templates of the bank touch T = 0 at
-    # a single phase, which MODEL_FLUX_FLOOR_MAGNITUDE and `_longest_run` drop before it is used.
-    warm = np.where(temperature > 0.0, temperature, np.nan)
-    assert np.nanmedian(np.nanmax(warm, axis=1) / np.nanmin(warm, axis=1)) < 2.0
+    # Past sncosmo's red edge the model is the release's own and is NOT held flat.
+    beyond = official.flux(phases, np.arange(base.maxwave(), official.maxwave(), 250.0))
+    peak = int(np.argmax(np.abs(beyond).sum(axis=1)))
+    assert np.ptp(beyond[peak]) > 0.0
 
 
-def test_the_tde_template_is_a_property_of_the_parent():
-    """Every re-rendering of one TDE parent has to be the same TDE.
+def test_the_tde_source_is_openuniverses_own_and_absolute():
+    """The TDE stopped being a substitution, and two things have to hold for that to be true.
 
-    The parent cannot supply the SED -- OpenUniverse's is AT2019qiz and MOSFiT's bank stands in --
-    so the template is drawn, and it is drawn from the parent's own id rather than from the caller's
-    generator. Otherwise a parent re-rendered twenty times would be twenty different objects sharing
-    one measured brightness and one split group.
+    Its SED is `2019qiz.sed` out of the release, so it has to cover R062 through F184 at the
+    lowest redshift generated. And its flux is absolute -- the file declares erg/s/cm2/A at 10 pc --
+    so reading it straight has to give an absolute magnitude a TDE could have, which the MOSFiT
+    bank it replaced could not do without being renormalised."""
+    sncosmo = pytest.importorskip("sncosmo")
 
-    Driven through `draw_class_population` rather than through the sample: TDE is retained but no
-    longer in CLASS_FRACTION, so `draw_population` never reaches it and this test would pass
-    vacuously. It guards the model, which is still here, for whoever re-enables the class."""
+    register_sources()
+    source = sncosmo.get_source(TDE_SOURCE_NAME)
+    assert source.maxwave() * (1 + 0.02) >= 21000.0
+    assert source.minphase() <= -10.0 and source.maxphase() >= 60.0
+    # AT2019qiz peaked around M_g = -18; anything outside this is a normalisation that got lost.
+    assert -20.0 < source.peakmag("bessellb", "ab") < -16.0
+
+
+def test_every_tde_uses_the_one_template_openuniverse_drew():
+    """OpenUniverse has a single TDE SED and all 3769 of its TDEs carry `template_index` 1, so
+    nothing about the model is drawn any more. The MOSFiT bank this replaced needed a draw seeded
+    from the parent's own id, so that a parent re-rendered twenty times stayed one object; that
+    machinery is gone and this pins that nothing reintroduced it.
+
+    Driven through `draw_class_population` rather than through the sample, because TDE is not in
+    CLASS_FRACTION yet and `draw_population` would never reach it."""
     pytest.importorskip("sncosmo")
     catalog = synthetic_parent_catalog()
-    by_parent = {}
+    seen = set()
     for seed in range(6):
         population = draw_class_population(catalog, "TDE", np.full(40, 0.1), np.random.default_rng(seed))
         for realization in population:
             assert realization["label"] == "TDE"
-            assert 0 <= realization["tde_template_index"] < tde_template_count()
-            drawn = by_parent.setdefault(realization["parent_key"], realization["tde_template_index"])
-            assert drawn == realization["tde_template_index"], realization["parent_key"]
-    assert by_parent
+            assert realization["source_name"] == TDE_SOURCE_NAME
+            assert "tde_template_index" not in realization
+            seen.add(realization["parent_key"])
+    assert seen
 
 
 def test_the_drawn_cadence_parity_reaches_the_window():
@@ -557,23 +533,6 @@ def test_the_measured_brightness_is_the_only_brightness():
         assert peak == pytest.approx(realization["peak_absolute_magnitude"], abs=1e-3)
 
 
-def test_the_iax_pre_explosion_region_is_suppressed_where_the_notebook_suppresses_it():
-    """`flux[stretched < -rise_time] /= 2000` needs the notebook's grid to select anything.
-
-    On the repacked file's own 81 phases from -15 the stretched grid starts at exactly -rise_time,
-    the strict comparison fired on nothing, and the pre-explosion row reached the light curve as a
-    plateau. On IAX_NOTEBOOK_PHASES it starts at -2 * rise_time and the suppression covers the real
-    region between there and -rise_time, which is what cell 14 does."""
-    pytest.importorskip("sncosmo")
-    _, base_wavelength, base_flux = _iax_base_sed()
-    for rise_time in (7.0, 15.0, 22.0):
-        source = iax_source(rise_time, 1.6, 0.5)
-        assert source.minphase() == pytest.approx(-2.0 * rise_time)
-        suppressed = source.flux(-1.5 * rise_time, base_wavelength)
-        kept = source.flux(-rise_time, base_wavelength)
-        assert suppressed.max() < kept.max() / 100.0, rise_time
-
-
 def test_no_window_carries_a_colour_the_model_cannot_produce():
     """The near-infrared shoulder MODEL_FLUX_FLOOR_MAGNITUDE cannot see.
 
@@ -650,14 +609,6 @@ def test_phases_are_measured_from_maximum_not_from_the_source_phase_zero():
     assert abs(days[magnitudes.argmin()]) < 12.0, days[magnitudes.argmin()]
 
 
-def test_the_tde_bank_is_cached_whole():
-    """A window of 24 over 227 uniformly drawn templates measured no hits at all."""
-    from kilonova.simulation.intermediate_z_contaminants import tde_source
-
-    assert tde_source.cache_parameters()["maxsize"] is None
-    assert tde_template_count() == 227
-
-
 def test_several_tiers_give_what_one_tier_at_a_time_gives():
     """Asking for both tiers at once must be an optimisation, not a change of result.
 
@@ -678,18 +629,20 @@ def test_several_tiers_give_what_one_tier_at_a_time_gives():
             assert np.allclose(shared_windows["mag_true"], alone_windows["mag_true"], equal_nan=True)
 
 
-def test_the_host_screen_is_the_parents_own_and_only_sn_iax_has_one():
+def test_the_host_screen_is_the_parents_own_and_only_some_classes_have_one():
     """The dust a re-rendered object carries is the dust its parent was given, or none.
 
-    OpenUniverse dusts SN Iax by hand and nothing else -- SN Ia carry theirs inside SALT's `c` and
-    the core-collapse classes carry none at all, which is a known bug of the simulation. The
-    generator used to reproduce the SN Iax AV distribution by fitting it; now it copies the number,
-    and what has to be pinned is that it copies it to the right class and does not invent one."""
+    Measured over OpenUniverse's whole catalogue, `AV != -9` for 100 % of SN Iax and SLSN-I and for
+    0 % of SN Ia, TDE and every core-collapse class -- the last of those being a known bug of the
+    simulation, and SN Ia carrying theirs inside SALT's `c`. The generator used to reproduce the
+    SN Iax AV distribution by fitting it; now it copies the number, and what has to be pinned is
+    that it copies it to the right class and does not invent one."""
     pytest.importorskip("sncosmo")
     catalog = synthetic_parent_catalog()
     for realization in draw_population(120, np.full(120, 0.1), np.random.default_rng(7), catalog):
         parent = catalog[catalog["parent_key"] == realization["parent_key"]].iloc[0]
-        assert ("host_av" in realization) == (realization["label"] == "SN Iax"), realization["label"]
+        screened = realization["label"] in ("SN Iax", "SLSN-I")
+        assert ("host_av" in realization) == screened, realization["label"]
         if "host_av" in realization:
             assert realization["host_av"] == pytest.approx(parent["host_av"])
             assert realization["host_rv"] == pytest.approx(parent["host_rv"])
@@ -698,40 +651,49 @@ def test_the_host_screen_is_the_parents_own_and_only_sn_iax_has_one():
 
 
 def test_openuniverse_templates_have_no_zero_flux_gap():
-    """The audit's SOUND test, over the templates OpenUniverse itself used.
+    """No V19 core-collapse template has a hole in its near-infrared, measured on the archive.
 
-    `defective_near_infrared_extension` runs two tests and they are not equally good. This pins
-    which is which, and it is settled by measurement rather than by argument now that the templates
-    are OpenUniverse's own rather than our reconstruction of them:
+    A PARTIAL run of exact zeros inside 9000-21000 A rest-frame is not physics under any model, and
+    it is the one near-infrared defect worth testing for. A phase where the WHOLE near-infrared is
+    zero is the template before explosion or after it has faded, which is a fact about the source
+    and not a hole in it, so only partial runs count.
 
-      * THE ZERO-FLUX GAP DISCRIMINATES. A partial run of exact zeros inside 9000-21000 A is not
-        physics under any model. Every SNANA template carried one, at 42 to 84 of the 91 sampled
-        phases; the `snsedextend` reconstruction carried 1559 of them across 35 sources, and its
-        F184 - Y106 colour was 0.85 mag from OpenUniverse's and swung 2 mag across the sample's
-        redshift range. These templates carry ZERO, and their colour matches OpenUniverse's to
-        0.004 mag in SN II. That is the whole discrimination, and this test holds it.
+    This used to be one half of `defective_near_infrared_extension`, an audit removed on 2026-09-18.
+    The other half asserted that F184 must not outshine H158, which was always documented as a
+    heuristic -- `salt3-nir-f184` violates it at 52 phases because a SN Ia HAS a secondary
+    near-infrared maximum -- and turned out to be worse: 35 of OpenUniverse's own 44 core-collapse
+    templates violate it, and those templates ARE the reference this sample is measured against. A
+    criterion the reference fails is not a defect criterion. The audit as a whole rested on the
+    premise that the `_WAVEEXT` extension is a degraded part of the model; OpenUniverse generated
+    the release's core-collapse photometry from it, so the extension IS the model, and the audit
+    pruned nothing in the end.
 
-      * F184 BRIGHTER THAN H158 DOES NOT. It was always documented as a heuristic -- it assumes a
-        smooth declining continuum, and `salt3-nir-f184` violates it at 52 phases because a SN Ia
-        HAS a secondary near-infrared maximum. It is now known to be worse than that: 35 of
-        OpenUniverse's own 44 core-collapse templates violate it, and those templates are the
-        reference this sample is measured against. A criterion the reference fails is not a defect
-        criterion, so it is deliberately NOT asserted here.
+    What the gap test discriminated is kept because it is real: every SNANA template carried a gap,
+    at 42 to 84 of the 91 sampled phases, and the `snsedextend` reconstruction carried 1559 across
+    35 sources with an F184 - Y106 colour 0.85 mag from OpenUniverse's. The release's own templates
+    carry ZERO, and their colour matches OpenUniverse's to 0.004 mag in SN II. This holds that.
     """
-    pytest.importorskip("sncosmo")
+    sncosmo = pytest.importorskip("sncosmo")
     register_sources()
+    # Rest-frame A: where the V19 extension takes over from the original spectroscopy.
+    NEAR_INFRARED_GAP_LIMITS = (9000.0, 21000.0)
     audited = 0
     for label, source_names in SOURCES_BY_LABEL.items():
-        if label in ("SN Iax", "TDE", "SN Ia"):
-            # None is an extended library template: SN Iax is warped per object, TDE is a blackbody
-            # over a MOSFiT photosphere, and SALT3 is parametric.
+        if label in ("SN Iax", "TDE", "SLSN-I", "SN Ia"):
+            # Only the V19 core-collapse templates carry an extension at all: SN Iax, TDE and
+            # SLSN-I are measured out to 24000-25000 A in the release itself, SALT3 is parametric.
             continue
         for source_name in source_names:
-            gaps = [
-                reason
-                for reason in defective_near_infrared_extension(source_name)
-                if "zero-flux gap" in reason
-            ]
+            source = sncosmo.get_source(source_name)
+            blue = max(source.minwave(), NEAR_INFRARED_GAP_LIMITS[0])
+            red = min(source.maxwave(), NEAR_INFRARED_GAP_LIMITS[1])
+            wavelength = np.arange(blue, red, 50.0)
+            assert wavelength.size, source_name
+            gaps = []
+            for phase in np.arange(source.minphase(), source.maxphase(), 1.0):
+                flux = source.flux(phase, wavelength)
+                if (flux <= 0.0).any() and (flux > 0.0).any():
+                    gaps.append(float(phase))
             assert not gaps, (label, source_name, len(gaps), gaps[:3])
             audited += 1
     assert audited == 44
@@ -753,67 +715,22 @@ def test_openuniverse_drew_no_hypernova_and_no_sn_iin_or_iib():
       * The SN II subtype split is 17/24 and 7/24, MEASURED, where it used to be the 0.70/0.15/0.15
         of Li et al. (2011) standing in for exactly this.
     """
-    assert set(SOURCES_BY_LABEL) == {"SN IIP", "SN IIL", "SN Ib", "SN Ic", "SN Ia", "SN Iax", "TDE"}
+    assert set(SOURCES_BY_LABEL) == {
+        "SN IIP",
+        "SN IIL",
+        "SN Ib",
+        "SN Ic",
+        "SN Ia",
+        "SN Iax",
+        "SLSN-I",
+        "TDE",
+    }
     assert len(SOURCES_BY_LABEL["SN IIP"]) == 17
     assert len(SOURCES_BY_LABEL["SN IIL"]) == 7
     assert len(SOURCES_BY_LABEL["SN Ib"]) == 13
     assert len(SOURCES_BY_LABEL["SN Ic"]) == 7
     every = sum(SOURCES_BY_LABEL.values(), [])
     assert not [name for name in every if "1998bw" in name]
-    assert SN_II_SUBTYPE_FRACTION == {"SN IIP": 17.0 / 24.0, "SN IIL": 7.0 / 24.0}
-
-
-def test_the_pruned_templates_are_still_defective():
-    """The templates the audit removed fail it, so the cut is reproducible and not a preference.
-
-    Named explicitly because the cost was severe -- every SNANA template goes, leaving four
-    distinct SEDs for the whole core-collapse half of the sample --
-    and a future reader is owed the ability to re-run the exact decision.
-    """
-    pytest.importorskip("sncosmo")
-    register_sources()
-    removed = [
-        "snana-2004hx",
-        "snana-2005gi",
-        "snana-2006gq",
-        "snana-2006iw",
-        "snana-2006jl",
-        "snana-2006kn",
-        "snana-2006kv",
-        "snana-2007iz",
-        "snana-2007kw",
-        "snana-2007ky",
-        "snana-2007lb",
-        "snana-2007ld",
-        "snana-2007lj",
-        "snana-2007ll",
-        "snana-2007lx",
-        "snana-2007lz",
-        "snana-2007md",
-        "snana-2007ms",
-        "snana-2007nr",
-        "snana-2007nv",
-        "snana-2007nw",
-        "snana-2007pg",
-        "snana-2004gv",
-        "snana-2004ib",
-        "snana-2005hm",
-        "snana-2006ep",
-        "snana-2006jo",
-        "snana-2007nc",
-        "snana-2007y",
-        "snana-04d1la",
-        "snana-04d4jv",
-        "snana-2004fe",
-        "snana-2004gq",
-        "snana-2006fo",
-        "snana-2006lc",
-        "snana-sdss004012",
-        "snana-sdss014475",
-    ]
-    for source_name in removed:
-        assert defective_near_infrared_extension(source_name), source_name
-        assert all(source_name not in names for names in SOURCES_BY_LABEL.values()), source_name
 
 
 def test_sn_iil_and_sn_iip_nugent_templates_are_the_same_sed():
@@ -975,28 +892,44 @@ def test_the_parent_catalogue_reads_what_the_re_render_inherits(tmp_path):
 
     catalog = pd.DataFrame(
         {
-            "id": [1, 2, 3, 4],
-            # 42 is a TDE, which PARENT_GENTYPES no longer lists: the reader has to drop it.
-            "gentype": [21, 32, 10, 42],
-            "z_CMB": [0.5, 0.8, 1.2, 0.3],
-            "peak_mjd": [60000.0, 60100.0, 60200.0, 60300.0],
-            "AV": [0.44, -9.0, -9.0, -9.0],
-            "RV": [3.1, -9.0, -9.0, -9.0],
+            "id": [1, 2, 3, 4, 5],
+            # 42 is a TDE and 12 a SN Iax; both are back in PARENT_GENTYPES now that their SED
+            # comes from OpenUniverse's release. 99 is a fixed-magnitude calibration source and is
+            # the one the reader still has to drop.
+            "gentype": [21, 32, 10, 42, 99],
+            "z_CMB": [0.5, 0.8, 1.2, 0.3, 0.9],
+            "peak_mjd": [60000.0, 60100.0, 60200.0, 60300.0, 60400.0],
+            "AV": [0.44, -9.0, -9.0, -9.0, -9.0],
+            "RV": [3.1, -9.0, -9.0, -9.0, -9.0],
             "model_param_names": [
                 ["template_index"],
                 ["template_index"],
                 ["template_index", "salt2_x0", "salt2_x1", "salt2_c", "salt2_mB"],
                 ["template_index"],
+                ["template_index"],
             ],
-            "model_param_values": [[7.0], [701.0], [0.0, 1e-5, 0.7, -0.03, 24.5], [1.0]],
+            "model_param_values": [
+                [7.0],
+                [701.0],
+                [0.0, 1e-5, 0.7, -0.03, 24.5],
+                [1.0],
+                [20.0],
+            ],
         }
     )
     catalog.to_parquet(tmp_path / "snana_10050.parquet", index=False)
 
     parents = openuniverse_parents.read_parent_catalog(tmp_path)
-    # The TDE is gone, and with it every class whose SED this side would have to supply.
-    assert list(parents["parent_key"]) == ["snana_10050_1", "snana_10050_2", "snana_10050_3"]
-    assert list(parents["template_index"]) == [7, 701, 0]
+    # The TDE is back -- its SED is OpenUniverse's own now -- and the fixed-magnitude source is
+    # what gets dropped.
+    assert list(parents["parent_key"]) == [
+        "snana_10050_1",
+        "snana_10050_2",
+        "snana_10050_3",
+        "snana_10050_4",
+    ]
+    assert list(parents["template_index"]) == [7, 701, 0, 1]
+    assert list(parents["label"][[0, 2, 3]]) == ["SN Ib", "SN Ia", "TDE"]
     # gentype 32 has no label of its own: OpenUniverse pools SN IIP and SN IIL into it and only the
     # template says which one an object is.
     assert list(parents["label"][[0, 2]]) == ["SN Ib", "SN Ia"]
@@ -1008,3 +941,50 @@ def test_the_parent_catalogue_reads_what_the_re_render_inherits(tmp_path):
     assert parents.loc[2, "salt2_x1"] == pytest.approx(0.7)
     assert parents.loc[2, "salt2_mB"] == pytest.approx(24.5)
     assert not np.isfinite(parents.loc[0, "salt2_x1"])  # a core-collapse row has no SALT parameters
+
+
+def test_the_phase_grid_is_anchored_at_the_file_edge():
+    """El borde de entrada no se redondea: ahi es donde OpenUniverse detecta sus objetos.
+
+    `scripts/build_openuniverse_cc_templates.py` resamplea el eje de fase a 1 d, y anclaba la regla
+    en `np.ceil(primera fase)`. Eso tira entre 0 y 1 d de SED que el archivo si tiene -- 0.605 d de
+    mediana sobre las 44 plantillas -- y es justo la rebanada donde cae el 25% de los objetos, que
+    quedaban sin magnitud anclable. El ancla tiene que ser el borde exacto y el ultimo punto no
+    puede pasarse del final, porque `np.interp` extrapolaria plano.
+    """
+    build = pytest.importorskip("importlib.util")
+    spec = build.spec_from_file_location(
+        "cc_build", Path(__file__).resolve().parents[1] / "scripts" / "build_openuniverse_cc_templates.py"
+    )
+    module = build.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for first, last in ((-7.98, 190.58), (-78.95, 120.98), (-42.65, 95.73), (-6.0, 192.0)):
+        grid = module.regular_phase_grid(first, last)
+        assert grid[0] == pytest.approx(first), "el primer punto ES el borde del archivo"
+        assert grid[-1] <= last, "el ultimo punto no puede extrapolar"
+        assert last - grid[-1] < module.PHASE_STEP
+        assert np.allclose(np.diff(grid), module.PHASE_STEP)
+
+
+def test_the_light_curve_spans_the_whole_template():
+    """La curva de luz no se recorta a una ventana centrada en el pico.
+
+    Era `peak_phase + (-20, +70)`, y una plantilla de maximo tardio perdia su parte temprana aunque
+    la tuviera: `ou-SN2005bf` empieza en -42.65 d y se renderizaba desde -22.5. Los objetos de
+    OpenUniverse se detectan pegados al inicio de la plantilla, asi que ese recorte les quitaba
+    justo la fase que necesitan para anclar la magnitud."""
+    sncosmo = pytest.importorskip("sncosmo")
+    register_sources()
+    from kilonova.simulation.intermediate_z_contaminants import template_phase_grid
+
+    for source_name in ("ou-SN2005bf", "ou-SN1987A", "ou-SN2004gt"):
+        source = sncosmo.get_source(source_name)
+        grid = template_phase_grid(source)
+        assert grid[0] == pytest.approx(source.minphase())
+        assert grid[-1] <= source.maxphase()
+        assert source.maxphase() - grid[-1] < 1.0
+        # y de verdad llega mas atras que la ventana vieja para las de maximo tardio
+        if source_name in ("ou-SN2005bf", "ou-SN1987A"):
+            peak = sncosmo.Model(source=source).source.peakphase("bessellb")
+            assert grid[0] < peak - 20.0, (source_name, grid[0], peak)

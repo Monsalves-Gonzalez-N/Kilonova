@@ -22,6 +22,7 @@ dependencies = [
     "torch",
     "specutils",
     "dust_extinction",
+    "sncosmo",
     "dustmaps",
 ]
 
@@ -53,6 +54,9 @@ where = ["src"]
 line-length = 110
 target-version = "py311"
 src = ["src", "tests"]
+# Sondas exploratorias: se corren a mano, usan sys.path.insert y imports agrupados a proposito.
+# No son pipeline y no se lintean; ver su README.
+exclude = ["scripts/probes_data_augmentation"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

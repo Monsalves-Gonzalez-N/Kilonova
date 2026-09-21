@@ -101,8 +101,8 @@ def collect_kilonova_pool(namespace, redshift, wanted, rng, attempts, minimum_ej
         massive = namespace["massive_simulation_pool"](minimum_ejecta_mass)
         simulation_pool = [simulation_id for simulation_id in simulation_pool if simulation_id in massive]
 
-    realizations = namespace["sample_kn_realizations_on_grid"](
-        [redshift], realizations_per_redshift=attempts, simulation_pool=simulation_pool, rng=rng
+    realizations = namespace["sample_kn_realizations_at_redshift"](
+        redshift, count=attempts, simulation_pool=simulation_pool, rng=rng
     )
     kn_models = namespace["build_kn_models"](
         realizations,

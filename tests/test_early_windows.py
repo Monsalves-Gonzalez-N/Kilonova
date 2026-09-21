@@ -25,6 +25,26 @@ def test_build_window_fixed_epoch_grid(tier_constants):
     assert window["days_since_detection"].min() == 0.0
 
 
+def test_window_carries_the_absolute_mjd(tier_constants):
+    """days_since_detection no basta para recuperar el MJD, y el MJD es lo que fija la fase.
+
+    La fase rest-frame contra la plantilla es (mjd - peak_mjd)/(1+z), y peak_mjd vive en el catalogo
+    padre en MJD absoluto. days_since_detection tiene su cero en la primera deteccion, que se corre
+    de objeto a objeto, asi que no lo determina."""
+    window = early_windows.build_window_from_model(
+        "123", bright_model(tier_constants["bands"]), tier_constants, redshift=0.2, gentype=10
+    )
+    assert "mjd" in window
+    epochs = window.drop_duplicates("epoch").sort_values("epoch")
+    assert np.all(np.diff(epochs["mjd"]) > 0)
+    # el cero del eje del clasificador es la primera deteccion, no el cero del calendario
+    shifted = epochs["mjd"] - epochs["mjd"].iloc[0]
+    assert np.allclose(shifted, epochs["days_since_detection"])
+    # y las visitas caen en la grilla de cadencia del survey, o sea es un tiempo real
+    steps = np.diff(epochs["mjd"])
+    assert np.allclose(steps % early_windows.BASE_CADENCE_DAYS, 0.0)
+
+
 def test_build_window_is_reproducible(tier_constants):
     first = early_windows.build_window_from_model(
         "123", bright_model(tier_constants["bands"]), tier_constants, redshift=0.2, gentype=10
@@ -108,7 +128,7 @@ def test_kn_object_id_is_unique_and_keeps_the_simulation_id_first():
     colliding on sim/angle/z with offsets rounding alike shared an id (~2 per million). The
     simulation_id has to stay the FIRST field: training/openuniverse_data.py reads it off there to
     keep one ejecta model inside a single split."""
-    realizations = early_windows.sample_kn_realizations_on_grid(
+    realizations = early_windows.sample_kn_realizations_in_bins(
         np.geomspace(0.01, 1.0, 5),
         realizations_per_redshift=200,
         simulation_pool=[7, 8],
@@ -120,8 +140,8 @@ def test_kn_object_id_is_unique_and_keeps_the_simulation_id_first():
         assert object_id.split("_")[0] == str(realization["simulation_id"])
 
 
-def test_sample_kn_realizations_on_grid_draws_both_cadence_parities():
-    realizations = early_windows.sample_kn_realizations_on_grid(
+def test_sample_kn_realizations_in_bins_draws_both_cadence_parities():
+    realizations = early_windows.sample_kn_realizations_in_bins(
         np.geomspace(0.01, 1.0, 5),
         realizations_per_redshift=400,
         simulation_pool=[7, 8],
@@ -135,20 +155,48 @@ def test_sample_kn_realizations_on_grid_draws_both_cadence_parities():
     assert abs(np.corrcoef(parities, offsets)[0, 1]) < 0.1
 
 
-def test_sample_kn_realizations_on_grid_covers_every_redshift():
+def test_sample_kn_realizations_in_bins_fills_every_bin():
     redshift_grid = np.geomspace(0.01, 1.0, 5)
-    realizations = early_windows.sample_kn_realizations_on_grid(
+    edges = early_windows.redshift_bin_edges(redshift_grid)
+    realizations = early_windows.sample_kn_realizations_in_bins(
         redshift_grid, realizations_per_redshift=3, simulation_pool=[7, 8], rng=np.random.default_rng(0)
     )
     assert len(realizations) == 15
     assert sorted(realizations) == [realization["noise_id"] for realization in realizations.values()]
-    redshift_counts = {}
+    redshifts = np.array([realization["redshift"] for realization in realizations.values()])
     for realization in realizations.values():
         assert realization["simulation_id"] in (7, 8)
         assert 0.0 <= realization["explosion_offset_days"] < early_windows.EXPLOSION_OFFSET_MAX_DAYS
         assert 0 <= realization["angle_index"] < early_windows.N_ANGLE_BINS
-        redshift_counts[realization["redshift"]] = redshift_counts.get(realization["redshift"], 0) + 1
-    assert redshift_counts == {float(redshift): 3 for redshift in redshift_grid}
+    # cada bin recibe sus realizations_per_redshift sorteos, y ninguna se sale de su bin
+    counts, _ = np.histogram(redshifts, edges)
+    assert counts.tolist() == [3] * len(redshift_grid)
+    assert redshifts.min() >= redshift_grid[0]
+    assert redshifts.max() <= redshift_grid[-1]
+
+
+def test_sample_kn_realizations_in_bins_does_not_reuse_the_nodes():
+    """La razon de ser del sorteo dentro del bin: con el z pegado al nodo, un millon de KN ocupaba
+    100 valores de redshift y los contaminantes 630 583, asi que el token de z identificaba la clase
+    sin mirar la curva."""
+    redshift_grid = np.geomspace(0.02, 1.0, 10)
+    realizations = early_windows.sample_kn_realizations_in_bins(
+        redshift_grid, realizations_per_redshift=100, simulation_pool=[7], rng=np.random.default_rng(0)
+    )
+    redshifts = np.array([realization["redshift"] for realization in realizations.values()])
+    assert len(np.unique(redshifts)) == len(redshifts)
+    assert not np.isin(redshifts, redshift_grid).any()
+
+
+def test_redshift_bin_edges_stay_between_neighbouring_nodes():
+    grid = np.geomspace(0.02, 1.0, 6)
+    edges = early_windows.redshift_bin_edges(grid)
+    assert len(edges) == len(grid) + 1
+    # el rango declarado es el rango generado: los bordes exteriores son los extremos de la grilla
+    assert edges[0] == pytest.approx(grid[0])
+    assert edges[-1] == pytest.approx(grid[-1])
+    assert (np.diff(edges) > 0).all()
+    assert (edges[1:-1] > grid[:-1]).all() and (edges[1:-1] < grid[1:]).all()
 
 
 def test_collect_object_records_drops_fixmag_and_limits(field_catalog_parquet):

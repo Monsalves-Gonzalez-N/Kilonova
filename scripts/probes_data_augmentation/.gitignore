@@ -1,0 +1,10 @@
+# Los CSV POR OBJETO de los barridos, que son megabytes y se regeneran corriendo la sonda. Lo que
+# queda en git es lo que se lee: los scripts, los resumenes por plantilla, y sobre todo la tabla
+# congelada, que vive en data/openuniverse/template_phase_anchor.csv y no aqui.
+anchor_measurement.csv
+batch_z05.csv
+batch_results.csv
+batch_results2.csv
+fast_anchor.csv
+fast_anchor_clamped.csv
+phase_truth.csv

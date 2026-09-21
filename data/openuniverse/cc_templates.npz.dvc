@@ -1,5 +1,5 @@
 outs:
-- md5: 48776b766c578d158e96ddbfb47539aa
-  size: 24057989
+- md5: 3118d9185b3c64ba5b744d09345d1aa8
+  size: 123605768
   hash: md5
   path: cc_templates.npz

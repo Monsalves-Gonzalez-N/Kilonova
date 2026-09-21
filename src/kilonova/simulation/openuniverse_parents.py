@@ -50,24 +50,31 @@ import pyarrow.parquet as pq
 # rather than moving one, and the sample would then have to be defended as a model of that class
 # instead of as a redistribution of OpenUniverse's.
 #
-# Left out for that reason:
-#   * TDE (42) -- OpenUniverse's TDE is the observed SED of AT2019qiz, never published as a usable
-#     template; MOSFiT's `tde` stood in for it and reproduced OpenUniverse's own photometry of its
-#     own objects only to 0.19 mag, against 0.01 mag for the classes below.
-#   * SN Iax (12) -- OpenUniverse's own model, but REGENERATED here from the published Rutgers
-#     notebook rather than read from the release, and the regeneration lands 0.05 mag off.
-# Left out for older reasons: SLSN-I (40), PISN (57, 58) and FIXMAG (99) are 0.4 % of the
-# contaminants and have no usable template on this side; the OpenUniverse kilonovae (50) are the
-# class the classifier is being taught to find, which cannot enter the contaminant sample.
+# SN Iax (12) AND TDE (42) WERE OUT AND ARE BACK, because the reason they were out has gone. Both
+# were substitutions: OpenUniverse's TDE is the observed SED of AT2019qiz, believed unpublished, so
+# MOSFiT's `tde` stood in and reproduced OpenUniverse's own photometry only to 0.19 mag; SN Iax was
+# OpenUniverse's own model but REGENERATED here from the Rutgers notebook, landing 0.05 mag off.
+# Both are now read from OpenUniverse's published model release -- see the SN Iax and TDE blocks in
+# `intermediate_z_contaminants`.
 #
-# `intermediate_z_contaminants` still carries the SN Iax and TDE models, unused, with the
-# provenance of both -- see the block comments there before putting either back.
-PARENT_GENTYPES = (10, 21, 26, 32)
+# Still out, and for reasons of their own:
+#   * PISN (57, 58) -- its SEDs stop at 20000 A rest-frame and F184's red edge is 21000, so it
+#     cannot cover F184 without extrapolating below z = 0.050, and this sample's grid starts at
+#     z = 0.010. It cannot be rendered in the bins the sample exists to fill. Its band-to-band
+#     residual against OpenUniverse's own photometry is also 0.10-0.16 mag against 0.015 for the
+#     classes that are in. SLSN-I (40) had been out with it and is now IN: one template, 1122
+#     objects, 0.015 mag, and a 10 pc calibration that is OpenUniverse's exactly.
+#   * gentype 99 -- NOT A TRANSIENT. 27771 objects whose magnitude does not vary in time at all
+#     (0.000 mag over the light curve) and is identical in all six Roman bands, i.e. a flat AB
+#     spectrum at fixed brightness: a calibration source. The `z_CMB` it carries means nothing.
+#   * the OpenUniverse kilonovae (50) -- the class the classifier is being taught to find, which
+#     cannot enter the contaminant sample.
+PARENT_GENTYPES = (10, 12, 21, 26, 32, 40, 42)
 CORE_COLLAPSE_GENTYPES = (21, 26, 32)
 
 # gentype 32 is missing on purpose: OpenUniverse pools SN IIP and SN IIL into one label and only
 # the template says which one an object is, so its label is resolved from `template_index`.
-LABEL_BY_GENTYPE = {10: "SN Ia", 21: "SN Ib", 26: "SN Ic"}
+LABEL_BY_GENTYPE = {10: "SN Ia", 12: "SN Iax", 21: "SN Ib", 26: "SN Ic", 40: "SLSN-I", 42: "TDE"}
 
 CATALOG_COLUMNS = [
     "id",

@@ -1,1 +1,9 @@
 /cc_templates.npz
+/iax_templates.npz
+/tde_template.npz
+/slsn_template.npz
+
+# Cuarentena: artefactos superados, 5.7 GB. Ni en git ni en DVC; ver su propio README.
+/_old_izc/
+# Logs de regeneracion: se escriben al lado del output, no son fuente.
+/*_regen_*.log

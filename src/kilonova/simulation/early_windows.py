@@ -181,9 +181,11 @@ def build_window_from_model(
     epoch_mjds = epochs_from_first_detection(base_epochs, first_detection_mjd, NUMBER_OF_EPOCHS)
 
     # Paso 2: grilla fija de épocas × bandas con observed/detected/mag_observed(ruidosa)/mag_err.
-    # El eje de tiempo es days_since_detection = epoch_mjd - first_detection_mjd: cero en la 1ª detección,
-    # misma convención para OpenUniverse y KN (el MJD absoluto no se usa). object_id: los OU pasan su id
-    # entero como string; las KN codifican "simulation_id_angle_index_explosion_offset_days".
+    # El eje de tiempo del clasificador es days_since_detection = epoch_mjd - first_detection_mjd:
+    # cero en la 1ª detección, misma convención para OpenUniverse y KN. El MJD absoluto va aparte en
+    # su propia columna porque no se deriva de éste; ver el comentario en la fila. object_id: los OU
+    # pasan su id entero como string; las KN codifican
+    # "simulation_id_angle_index_explosion_offset_days".
     rows = []
     for epoch_index, epoch_mjd in enumerate(epoch_mjds, start=1):
         days_since_detection = float(epoch_mjd - first_detection_mjd)
@@ -200,6 +202,13 @@ def build_window_from_model(
                 "label": GENTYPE_LABEL.get(gentype, "UNKNOWN"),
                 "z_CMB": redshift,
                 "epoch": epoch_index,
+                # El MJD absoluto de la visita. days_since_detection NO lo determina: la cadencia
+                # salta visitas, y una epoca sin deteccion corre el cero. Se guarda porque la fase
+                # rest-frame contra la plantilla es (mjd - peak_mjd)/(1+z) y peak_mjd vive en el
+                # catalogo padre en MJD absoluto; sin esta columna hay que recuperarlo casando
+                # mag_true contra el hdf5 de OpenUniverse. En el camino KN es el eje de tiempo
+                # sintetico del modelo, no un MJD de calendario.
+                "mjd": float(epoch_mjd),
                 "days_since_detection": days_since_detection,
                 "band": band,
                 # mag_true infinita (banda sin flujo) sigue siendo observada: da una realizacion de
@@ -315,27 +324,90 @@ def nearest_time_index(simulation_time_grids, simulation_id, rest_phase_days):
     return int(time_index_array[nearest_position])
 
 
-def sample_kn_realizations_on_grid(redshift_grid, realizations_per_redshift, simulation_pool, rng):
-    """realizations_per_redshift sorteos (simulacion, angulo, offset de explosion, paridad de la
-    cadencia) por cada z de la grilla. noise_id secuencial siembra el ruido; el mismo set de
+def redshift_bin_edges(redshift_grid):
+    """Bordes de bin alrededor de una grilla de redshift, un bin por nodo.
+
+    Medias geometricas, no aritmeticas, porque la grilla del pipeline es logaritmica: asi el bin de
+    cada nodo cubre el mismo ancho FRACCIONAL en todo el rango en vez de ser holgado arriba y
+    apretado abajo. Con una grilla lineal el borde sigue cayendo entre nodos vecinos, que es la
+    unica propiedad de la que depende el sorteo.
+
+    Los bordes exteriores se recortan a los extremos de la grilla para que el rango declarado por
+    --redshift-min/--redshift-max sea exactamente el rango generado. Los dos bines de los extremos
+    quedan de medio ancho a cambio."""
+    grid = np.asarray(redshift_grid, dtype=float)
+    if len(grid) < 2:
+        raise ValueError("una grilla de un solo nodo no define bines")
+    interior = np.sqrt(grid[1:] * grid[:-1])
+    return np.concatenate([[grid[0]], interior, [grid[-1]]])
+
+
+def sample_kn_realizations_in_bins(redshift_grid, realizations_per_redshift, simulation_pool, rng):
+    """realizations_per_redshift sorteos (redshift, simulacion, angulo, offset de explosion, paridad
+    de la cadencia) por cada bin de la grilla. noise_id secuencial siembra el ruido; el mismo set de
     realizaciones se comparte entre tiers (la misma KN observada en deep y wide).
+
+    EL REDSHIFT SE SORTEA DENTRO DEL BIN, no se toma del nodo, y esa es la unica diferencia con la
+    version anterior de esta funcion. Con el nodo, el millon de KN de la corrida vigente ocupaba
+    exactamente 100 valores de z mientras que los contaminantes ocupaban 630 583: la regla "z esta
+    en la grilla KN -> es KN" acertaba el 99.998 % sin mirar una sola curva. Es una huella del
+    generador, no fisica, y el `nn.Linear(1, d_model)` con que el modelo lee z no la vuelve
+    inofensiva -- las capas que siguen si son no lineales. La misma razon por la que
+    `intermediate_z_contaminants.draw_redshifts_from_deficit` ya sorteaba uniforme dentro del bin en
+    vez de apilar los izc sobre los nodos.
+
+    No cuesta computo: `kn_model_from_spectra` integra el espectro de CADA realizacion a SU
+    redshift (no hay memoizacion por nodo en `magnitudes_for_bands`), asi que la grilla nunca
+    amortizo nada. Lo unico que se amortiza es `load_simulation_spectra`, que agrupa por
+    simulation_id y es indiferente al redshift.
+
+    El sorteo es log-uniforme dentro del bin, coherente con la grilla log del pipeline; los bines
+    son lo bastante angostos (Dz/z ~ 4 % con 100 nodos entre 0.02 y 1) como para que la eleccion
+    entre log-uniforme y uniforme no mueva la distribucion marginal.
+
+    La distribucion en z por bin no cambia: se conserva el mismo numero de realizaciones por bin,
+    solo deja de estar concentrado en un punto.
 
     `cadence_parity` se sortea aparte del offset y con la misma probabilidad: juntos reproducen la
     fase uniforme del merger dentro del ciclo de 10 d de la cadencia (ver CADENCE_PARITY_PERIOD)."""
+    edges = redshift_bin_edges(redshift_grid)
     realizations = {}
     noise_id = 0
-    for redshift in np.asarray(redshift_grid, dtype=float):
+    for index in range(len(edges) - 1):
+        low, high = np.log(edges[index]), np.log(edges[index + 1])
         for _ in range(realizations_per_redshift):
-            realizations[noise_id] = {
-                "noise_id": noise_id,
-                "redshift": float(redshift),
-                "simulation_id": int(rng.choice(simulation_pool)),
-                "angle_index": int(rng.integers(N_ANGLE_BINS)),
-                "explosion_offset_days": float(rng.uniform(0.0, EXPLOSION_OFFSET_MAX_DAYS)),
-                "cadence_parity": int(rng.integers(CADENCE_PARITY_PERIOD)),
-            }
+            redshift = float(np.exp(rng.uniform(low, high)))
+            realizations[noise_id] = _kn_realization(noise_id, redshift, simulation_pool, rng)
             noise_id += 1
     return realizations
+
+
+def sample_kn_realizations_at_redshift(redshift, count, simulation_pool, rng):
+    """`count` realizaciones a UN redshift exacto, el que se pide.
+
+    No es la ruta del dataset -- esa es `sample_kn_realizations_in_bins`, que sortea z dentro del
+    bin justamente para que las KN no se apilen sobre un punto. Esta existe para figuras y
+    diagnosticos, donde fijar el redshift es el proposito del grafico y no una propiedad del
+    generador que se cuele en los datos de entrenamiento."""
+    return {
+        noise_id: _kn_realization(noise_id, float(redshift), simulation_pool, rng)
+        for noise_id in range(count)
+    }
+
+
+def _kn_realization(noise_id, redshift, simulation_pool, rng):
+    """Una realizacion: lo que se sortea aparte del redshift.
+
+    `cadence_parity` sale aparte del offset y con la misma probabilidad: juntos reproducen la fase
+    uniforme del merger dentro del ciclo de 10 d de la cadencia (ver CADENCE_PARITY_PERIOD)."""
+    return {
+        "noise_id": noise_id,
+        "redshift": redshift,
+        "simulation_id": int(rng.choice(simulation_pool)),
+        "angle_index": int(rng.integers(N_ANGLE_BINS)),
+        "explosion_offset_days": float(rng.uniform(0.0, EXPLOSION_OFFSET_MAX_DAYS)),
+        "cadence_parity": int(rng.integers(CADENCE_PARITY_PERIOD)),
+    }
 
 
 def kn_object_id(realization):

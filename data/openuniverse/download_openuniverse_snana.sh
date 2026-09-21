@@ -4,19 +4,28 @@
 #
 # Two kinds of file per healpix:
 #   snana_<healpix>.parquet  -> catalog header (id, gentype, z_CMB, peak_mjd, peak_mag_*). ~4 MB each, ~140 MB total.
-#   snana_<healpix>.hdf5     -> SED grid + true per-band AB mags.                          ~16 GB each, ~530 GB total.
+#   snana_<healpix>.hdf5     -> per-object `mjd` + true AB mags `mag_{R,Z,Y,J,H,F,K}`.     ~0.5 GB each, ~16 GB total.
+#
+# THE HDF5 CARRY PHOTOMETRY, NOT SPECTRA. Measured on the 33 files on disk (2026-09-18): every
+# object group holds `mjd` and the seven `mag_*`, and nothing else. So there is no `flambda` here to
+# de-redshift: the SED templates come from the official model release, not from these files. See
+# `scripts/build_openuniverse_cc_templates.py`.
+#
+# The time axis is NOT the same for every object: measured per gentype, SN Ib/Ic step 1 d, SN II
+# and SN Ia step 2 d (up to 4), the Kasen kilonova 0.1 d. `nearest_model_magnitude` snaps to it, so
+# the quantisation of `mag_true` is half a step -- up to 1 observer-frame day for a SN II.
 #
 # Usage:
-#   ./download_openuniverse_snana.sh            # all: both .parquet and .hdf5 for all 33 healpix (~530 GB)
+#   ./download_openuniverse_snana.sh            # all: both .parquet and .hdf5 for all 33 healpix
 #   ./download_openuniverse_snana.sh parquet    # light: only .parquet
-#   ./download_openuniverse_snana.sh hdf5       # heavy: only .hdf5 (~530 GB)
+#   ./download_openuniverse_snana.sh hdf5       # heavy: only .hdf5 (~16 GB)
 #   ./download_openuniverse_snana.sh all 9921 9922   # both kinds, only these healpix
 #
-# Edit TARGET_DIR to point at a disk with enough room for the hdf5 (~530 GB).
+# TARGET_DIR is where the copy in use lives; override it for a different disk.
 
 set -euo pipefail
 
-TARGET_DIR="/Volumes/T7/openuniverse2025"
+TARGET_DIR="${TARGET_DIR:-$HOME/Dropbox/Kilonova/openuniverse2025}"
 
 BASE_URL="https://nasa-irsa-simulations.s3.amazonaws.com/openuniverse2024/roman/full/roman_rubin_cats_v1.1.2_faint"
 

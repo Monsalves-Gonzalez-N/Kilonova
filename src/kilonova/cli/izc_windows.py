@@ -1,9 +1,9 @@
 """kn-izc-windows: OpenUniverse contaminants re-rendered at the redshifts the survey has none at.
 
 Reads the 33 healpix catalogues, counts the redshift deficit of the training set against its own
-kilonovae, draws a parent object per missing contaminant, measures that parent's brightness off its
-full light curve in the release's hdf5, and re-renders it at the drawn redshift through the same
-noise recipe, cadence and window logic as `kn-run-openuniverse` and `kn-kilonova-windows`:
+kilonovae, draws a parent object per missing contaminant, measures that parent's brightness, and
+re-renders it at the drawn redshift through the same noise recipe, cadence and window logic as
+`kn-run-openuniverse` and `kn-kilonova-windows`:
 
     {output_dir}/izc_windows_deep.parquet
     {output_dir}/izc_windows_wide.parquet
@@ -12,9 +12,19 @@ noise recipe, cadence and window logic as `kn-run-openuniverse` and `kn-kilonova
 the object it was re-rendered from, which is what puts every copy of a parent, and the parent
 itself, on one side of the leakage-aware split.
 
-The hdf5 files are the expensive input and the only one that has to be mounted: `--source` points
-at the directory of snana_*.hdf5. The catalogues are 135 MB and live in the repository's own data
-directory.
+WHERE THE BRIGHTNESS COMES FROM is `--brightness`, and by default it is the training set itself:
+the parent's own early window, anchored to its template by `window_anchor` -- the analytic phase
+plus the frozen table of 48 anchors -- so the sample is generated from the parquets that are
+already here and the 16 GB per field of snana_*.hdf5 are not read at all. `--brightness hdf5` is
+the older path, the peak of the parent's full light curve, kept because it is the measurement the
+window one was calibrated against and the only one that can reach a parent the survey never
+detected. Over 1320 objects the two agree to 0.002 mag in median.
+
+THE LIMITATION OF THE DEFAULT, stated so nobody has to discover it: only parents with a window can
+be anchored, and a parent has a window only if the survey detected it AT ITS OWN REDSHIFT, so the
+faintest objects of every redshift are missing from the pool. It is accepted: 48 models are shared
+by 1.3 million objects, so the faint end of a template still arrives through the objects that were
+detected lower down.
 """
 
 import argparse
@@ -27,7 +37,7 @@ import pyarrow.parquet as pq
 from kilonova.config import load_paths, require
 from kilonova.log import setup_logging
 from kilonova.simulation import intermediate_z_contaminants as izc
-from kilonova.simulation import openuniverse_parents
+from kilonova.simulation import openuniverse_parents, window_anchor
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +78,13 @@ def main(argv=None):
         default=None,
         help="generate only this many objects, sampled from the deficit's own shape (smoke tests)",
     )
+    parser.add_argument(
+        "--brightness",
+        choices=["window", "hdf5"],
+        default="window",
+        help="where each parent's brightness is read from: its own early window (default, no hdf5) "
+        "or the peak of its full light curve in the release's hdf5",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--workers", type=int, default=1, help="processes over which to split the healpix (1 = sequential)"
@@ -77,7 +94,10 @@ def main(argv=None):
 
     setup_logging(arguments.verbose)
     paths = load_paths()
-    source = require(arguments.source or paths.openuniverse_source, "openuniverse_source")
+    from_windows = arguments.brightness == "window"
+    source = arguments.source or paths.openuniverse_source
+    if not from_windows:
+        source = require(source, "openuniverse_source")
     catalogs = require(arguments.catalogs or paths.openuniverse_catalogs, "openuniverse_catalogs")
     output_dir = Path(arguments.output_dir or paths.output_dir or ".")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -115,6 +135,16 @@ def main(argv=None):
         catalog["healpix"].nunique(),
         len(source_by_template_index),
     )
+    if from_windows:
+        # Solo los padres que el survey detecto: ver la limitacion en el docstring del modulo.
+        with_windows = window_anchor.parents_with_windows(windows_dir, tiers)
+        catalog = catalog[catalog["parent_key"].isin(with_windows)]
+        logger.info(
+            "%d of them have an early window, which is the pool the window anchoring can draw from",
+            len(catalog),
+        )
+        if catalog.empty:
+            raise SystemExit(f"no parent of {windows_dir} has a window to anchor against")
     population = izc.draw_population_from_parents(
         catalog, redshifts, random_generator, source_by_template_index
     )
@@ -122,10 +152,17 @@ def main(argv=None):
     logger.info("%d objects from %d distinct parents", len(population), parents_used)
 
     output_paths = {tier: output_dir / f"izc_windows_{tier}.parquet" for tier in tiers}
-    totals, per_tier = izc.run_izc_tiers(population, source, tiers, output_paths, arguments.workers)
+    totals, per_tier = izc.run_izc_tiers(
+        population,
+        source,
+        tiers,
+        output_paths,
+        arguments.workers,
+        windows_directory=windows_dir if from_windows else None,
+    )
 
     print(
-        f"objects={totals['objects']}  parents={parents_used}  "
+        f"objects={totals['objects']}  parents={parents_used}  brightness={arguments.brightness}  "
         f"without a measurable brightness={totals['unmeasured']}"
     )
     for tier in tiers:

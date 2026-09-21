@@ -1,0 +1,5 @@
+outs:
+- md5: c0eb5d8b1a5bde8eb6061bdcf3039b1f
+  size: 717491
+  hash: md5
+  path: tde_template.npz

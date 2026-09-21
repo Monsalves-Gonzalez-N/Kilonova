@@ -40,13 +40,12 @@ K-corrección y todo lo demás incorporado; este pipeline solo les aplica la rec
 ventana. Por eso **ningún fix de la fotometría sintética los toca** — esa fotometría existe
 únicamente en el camino de las KN, que parten de espectros LANL en reposo.
 
-## Superado — conservado en disco
+## Superado — conservado en `_old_izc/`
 
-| archivo | por qué quedó obsoleto |
-|---|---|
-| `kn_windows_{deep,wide}.parquet.cadence-parity-leak` | la fuga de paridad de la cadencia de más abajo (1ª corrida del 2026-07-30, la del factor angular) |
-| `openuniverse_tokens.npz.stale-2026-07-30` | caché de tokens construida sobre esos parquets |
-| `openuniverse_tokens_test.npz.stale-group-key-v1` | recorte de test con el split viejo, agrupado por `(tier, transiente)` en vez de por transiente |
+Desde el 2026-09-18 todo lo superado vive en **`data/openuniverse/_old_izc/`**, que tiene su propio
+README con la tabla de qué es cada archivo y por qué salió. Nada de esa carpeta se usa: si un script
+lee algo de ahí, es un bug. La regla del sufijo (`.motivo`) sigue en pie, pero el archivo se mueve a
+la cuarentena en vez de quedarse al lado del vivo, que era lo que confundía.
 
 ## Superado — **borrado el 2026-07-30** (30 GB)
 
@@ -220,7 +219,7 @@ detecta ahí, la fase de la cadencia quedaba impresa en la etiqueta.
 
 La fase del merger dentro del ciclo de 10 d tiene **dos** grados de libertad: el retardo hasta la
 primera visita y la **paridad** de esa visita. El offset U[0,5) sí daba bien el retardo; la paridad
-no se sorteaba. Ahora `sample_kn_realizations_on_grid` extrae `cadence_parity` aparte y
+no se sorteaba. Ahora `sample_kn_realizations_in_bins` extrae `cadence_parity` aparte y
 `cadence_schedule` la aplica vía `visit_index_offset`.
 
 Fase par en la época de primera detección, y lo que se puede sacar solo de la máscara:
@@ -253,7 +252,7 @@ temporal, aprendible de forma legítima, no un atajo.
 
 Fijado por `test_cadence_parity_selects_the_band_pair_of_the_first_epoch` (las dos paridades dan
 pares de banda complementarios en la primera época) y
-`test_sample_kn_realizations_on_grid_draws_both_cadence_parities` (50/50 e independiente del
+`test_sample_kn_realizations_in_bins_draws_both_cadence_parities` (50/50 e independiente del
 offset).
 
 ## Resuelto: `kn_object_id` ya es único

@@ -1,10 +1,14 @@
 """kn-kilonova-windows: early-window light curves for LANL kilonovas over a redshift grid.
 
-Samples realizations (simulation, viewing angle, explosion offset) at every redshift of the
-grid, synthesizes the 6-band Roman photometry from the cached LANL rest-frame spectra, and
+Samples realizations (redshift, simulation, viewing angle, explosion offset) inside every bin of
+the grid, synthesizes the 6-band Roman photometry from the cached LANL rest-frame spectra, and
 writes one kn_windows_{tier}.parquet per tier with the same noise recipe, cadence and window
 logic as the OpenUniverse contaminants (kn-early-windows). Realizations are shared across
 tiers: the same kilonova is observed in deep and wide.
+
+The redshift is drawn WITHIN the bin, not taken from its node: see
+early_windows.sample_kn_realizations_in_bins for why a grid of nodes was a generator fingerprint
+the classifier could read straight off the redshift token.
 """
 
 import argparse
@@ -64,9 +68,9 @@ def main(argv=None):
         arguments.redshift_min, arguments.redshift_max, arguments.n_redshift, arguments.redshift_spacing
     )
     print(
-        f"Redshift grid ({arguments.redshift_spacing}, N={len(redshift_grid)}): "
+        f"Redshift grid ({arguments.redshift_spacing}, N={len(redshift_grid)} bins): "
         f"{redshift_grid[0]:.4f} -> {redshift_grid[-1]:.4f}, "
-        f"{arguments.realizations_per_redshift} realizations each"
+        f"{arguments.realizations_per_redshift} realizations drawn inside each bin"
     )
 
     lanl_catalog = early_windows.load_lanl_catalog_metadata(lanl_spectra_path)
@@ -74,7 +78,7 @@ def main(argv=None):
     simulation_time_grids = early_windows.build_simulation_time_grids(lanl_catalog)
     wavelength_rest_aa = early_windows.load_lanl_wavelength_grid(lanl_spectra_path)
 
-    realizations = early_windows.sample_kn_realizations_on_grid(
+    realizations = early_windows.sample_kn_realizations_in_bins(
         redshift_grid,
         arguments.realizations_per_redshift,
         simulation_pool,
