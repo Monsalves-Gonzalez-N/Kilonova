@@ -36,7 +36,7 @@ flux_calibrated(zp)  = 10^((27.5 − zp)/2.5)                         [fcal/e⁻
 Hourglass `fluxcal_err` además incluye un término "galaxy" (host SB Poisson) sumado dentro, no desagregable.
 
 ### Origen de la fórmula
-Es la **ecuación CCD estándar** (Howell 1989, eq. 14) en espacio de cuentas:
+Es la **ecuación CCD estándar** (Howell 1989, eq. 1) en espacio de cuentas:
 ```
 σ²(F_phys) = F_phys + n_pix · (σ²_sky + σ²_read)        [e⁻²]
 ```
@@ -47,7 +47,7 @@ con `n_pix = NEA` para fotometría PSF de fuente puntual (King 1983; Naylor 1998
 - Fondo: `sky²` y `read²` ya son varianzas en `[e⁻²/pix]` desde el principio (eqs. 9-10). El `α²` es propagación lineal pura `[e⁻²] → [fcal²]`.
 
 ### Referencias
-- **Howell (1989)**, *PASP* 101, 616 — ecuación CCD estándar (eq. 14).
+- **Howell (1989)**, *PASP* 101, 616 — ecuación CCD estándar (eq. 1).
 - **Howell**, *Handbook of CCD Astronomy* (Cambridge, 2ª ed. 2006) — caps. 4-5, derivación pedagógica.
 - **King (1983)**, *PASP* 95, 163 — definición formal de NEA.
 - **Naylor (1998)**, *MNRAS* 296, 339 — extracción óptima PSF.

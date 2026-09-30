@@ -10,7 +10,7 @@ floor, zeropoint jitter, source flux, SNR, limiting magnitude). The cadence
 scheduling differs per consumer (observed-MJD vs epoch-position) and the SED ->
 AB-magnitude step live in their own modules/notebooks, so they stay out of here.
 
-The CCD equation in electrons (Howell 1989, eq. 14), the same one that
+The CCD equation in electrons (Howell 1989, eq. 1), the same one that
 reproduces Hourglass's fluxcal_err:
 
     sigma^2(F) = F_source + NEA * (B_sky + B_thermal + B_dark + sigma_read^2)
@@ -25,7 +25,6 @@ import numpy as np
 
 SNR_DETECTION = 5.0
 ZP_JITTER_SIGMA = 0.15  # mag, FOV scatter of the zeropoint (Rose et al. 2025, eq. 8)
-FIELD_SEED = 0  # reproducibility of the per-tier field choice
 
 # --- Roman High Latitude Time Domain Survey (HLTDS): tiers Wide / Deep ---
 # Total exposure time per EPOCH (s) from the HLTDS design (coadd/MA-table per epoch).
@@ -50,6 +49,12 @@ HLTDS_FIELD_CENTER = {
     "EDFS_b": (63.60000, -47.60000),
 }
 HLTDS_FIELDS_BY_TIER = {"deep": ["ELAIS-N1", "EDFS_a"], "wide": ["ELAIS-N1", "EDFS_b"]}
+# The simulation evaluates the background of EVERY object of a tier at ONE field center, not at a
+# mix of the tier's fields: the noise floor is a single number per (band, tier). Of the two fields
+# each tier observes, these are the higher-zodiacal ones (getSkyLevel ~45-60% above ELAIS-N1 in all
+# bands), so the simulated depths are conservative by 0.02-0.16 mag. This is the field the training
+# set was generated with; changing it changes every noise floor and requires regenerating the data.
+SIMULATION_FIELD_BY_TIER = {"wide": "EDFS_b", "deep": "EDFS_a"}
 
 # Exposure-dependent read noise (Rose et al. 2025, eq. 9): denominator n(n+1), NOT (n+1).
 # Decreases with t_exp and saturates at the floor sqrt(25)=5 e- (up-the-ramp). Replaces the
@@ -101,26 +106,25 @@ def read_noise_electrons(exposure_time):
     return np.sqrt(READ_FLOOR_VARIANCE + ramp_variance)
 
 
-def field_center_for_tier(tier, rng=None):
-    """Pick at random an HLTDS field that observes this tier -> (name, RA, Dec) [deg]:
-    deep -> {ELAIS-N1, EDFS_a}, wide -> {ELAIS-N1, EDFS_b}. `rng` fixes the choice."""
-    if rng is None:
-        rng = np.random.default_rng()
-    field_name = str(rng.choice(HLTDS_FIELDS_BY_TIER[tier]))
+def simulation_field_center(tier):
+    """The single HLTDS field whose center sets the background of every object of this tier
+    (SIMULATION_FIELD_BY_TIER) -> (name, RA, Dec) [deg]."""
+    field_name = SIMULATION_FIELD_BY_TIER[tier]
     field_ra, field_dec = HLTDS_FIELD_CENTER[field_name]
     return field_name, field_ra, field_dec
 
 
-def build_tier_constants(tier, field_seed=FIELD_SEED):
+def build_tier_constants(tier):
     """Per-tier constants of the error recipe derived from galsim.roman at the tier's exposure
-    times: bands, AB zeropoint, NEA-weighted background noise floor, chosen field. The noise
-    floor is the background term NEA*(sky + thermal*t + dark*t + read^2), fixed per band."""
+    times: bands, AB zeropoint, NEA-weighted background noise floor, and the tier's simulation
+    field. The noise floor is the background term NEA*(sky + thermal*t + dark*t + read^2), fixed
+    per band and shared by every object of the tier."""
     galsim, roman = _galsim_roman()
     bandpasses = roman_bandpasses()
     exposure_time = EXPOSURE_TIME_BY_TIER[tier]
     anchor_band = TIER_ANCHOR_BAND[tier]
     bands = [band for band in ALL_BANDS_BY_WAVELENGTH if band in exposure_time]
-    field_name, field_ra, field_dec = field_center_for_tier(tier, np.random.default_rng(field_seed))
+    field_name, field_ra, field_dec = simulation_field_center(tier)
     field_world_position = galsim.CelestialCoord(field_ra * galsim.degrees, field_dec * galsim.degrees)
 
     zeropoint = {band: bandpasses[band].zeropoint for band in bands}

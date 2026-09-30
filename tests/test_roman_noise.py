@@ -71,11 +71,13 @@ def test_epochs_from_first_detection_takes_n_consecutive():
     assert roman_noise.epochs_from_first_detection(epoch_times, 22.0, 4).tolist() == [25.0]
 
 
-def test_field_center_for_tier_is_seeded():
-    first = roman_noise.field_center_for_tier("deep", np.random.default_rng(0))
-    second = roman_noise.field_center_for_tier("deep", np.random.default_rng(0))
-    assert first == second
-    assert first[0] in roman_noise.HLTDS_FIELDS_BY_TIER["deep"]
+def test_simulation_field_is_the_one_the_training_set_used():
+    # Pinned: the training set was generated with these fields; changing them moves every noise floor.
+    assert roman_noise.SIMULATION_FIELD_BY_TIER == {"wide": "EDFS_b", "deep": "EDFS_a"}
+    for tier, field_name in roman_noise.SIMULATION_FIELD_BY_TIER.items():
+        assert field_name in roman_noise.HLTDS_FIELDS_BY_TIER[tier]
+        field_ra, field_dec = roman_noise.HLTDS_FIELD_CENTER[field_name]
+        assert roman_noise.simulation_field_center(tier) == (field_name, field_ra, field_dec)
 
 
 def test_source_flux_and_limiting_magnitude_roundtrip():
