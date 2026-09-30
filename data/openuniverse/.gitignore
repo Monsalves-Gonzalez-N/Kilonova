@@ -7,3 +7,4 @@
 /_old_izc/
 # Logs de regeneracion: se escriben al lado del output, no son fuente.
 /*_regen_*.log
+/openuniverse_tokens_izc.npz

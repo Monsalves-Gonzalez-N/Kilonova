@@ -45,7 +45,9 @@ def first_existing(candidates, default):
 # Resolved against the working directory, so this runs from either machine; the absolute path it
 # replaces only existed on the Mac.
 DATA_DIR = first_existing(["data/openuniverse", "../data/openuniverse"], "../data/openuniverse")
-CHECKPOINT = "checkpoints/kilonova_transformer-soup.ckpt"
+# El checkpoint por defecto es el de la generacion vigente; `KN_CHECKPOINT` lo cambia sin editar
+# el script, que es lo que hace falta para comparar dos corridas con las MISMAS figuras.
+CHECKPOINT = os.environ.get("KN_CHECKPOINT", "checkpoints/izc-2026-09-24/kilonova_transformer-soup.ckpt")
 PLOTS_DIR = "plots"
 os.makedirs(PLOTS_DIR, exist_ok=True)
 C_CONTAMINANT = "#8338EC"
