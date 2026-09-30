@@ -17,8 +17,9 @@ Nothing in `training/` imports this, and this imports nothing from `training/`. 
 parquet files with the window schema of `build_window_from_model`, so a generated sample can be
 inspected and thrown away without touching the training path. What the training path does know is
 how to READ one: `training/openuniverse_data.py` takes the two `izc_windows_{tier}.parquet` as
-optional inputs and reads the split group off the `object_id`, which is where the parent it was
-re-rendered from is written down.
+optional inputs and reads the parent off the `object_id`, which is where the object it was
+re-rendered from is written down. The sample is TRAINING AUGMENTATION only: validation and test
+hold OpenUniverse objects alone, and a re-rendering whose parent is held out there is dropped.
 
 WHAT AN OBJECT OF THIS SAMPLE IS. Not a draw from a luminosity function: a real OpenUniverse
 object, re-rendered at a redshift it did not have. `openuniverse_parents.read_parent_catalog`
@@ -587,6 +588,8 @@ def template_phase_grid(source):
     first, last = float(source.minphase()), float(source.maxphase())
     count = int(np.floor((last - first) / REST_FRAME_PHASE_STEP)) + 1
     return first + np.arange(count) * REST_FRAME_PHASE_STEP
+
+
 # Observed-frame grid the spectrum is sampled on. The limits bracket R062 to F184 with room to
 # spare; the grid is intersected with each model's own validity range, because a source that does
 # not reach a Roman band should fail the coverage check inside `spectrum_to_roman_magnitudes` and
@@ -1101,7 +1104,7 @@ def source_of(realization):
     """The sncosmo source a realization renders through, without the model around it.
 
     What `build_model` picks in its first six lines, needed on its own by the callers that only
-    want the template's phase range -- the anchoring checks `minphase` before it renders anything.""" 
+    want the template's phase range -- the anchoring checks `minphase` before it renders anything."""
     if realization["label"] == "SN Iax":
         return iax_source(realization["iax_template_index"])
     if realization["label"] == "TDE":
@@ -1600,8 +1603,9 @@ def measure_population_brightness(population, hdf5_path, cosmology=None):
     return unmeasured
 
 
-def run_izc_healpix(healpix, population, source_directory, tiers, shard_directory=None,
-                    cosmology=None, windows_directory=None):
+def run_izc_healpix(
+    healpix, population, source_directory, tiers, shard_directory=None, cosmology=None, windows_directory=None
+):
     """Measure, render and window every object of one healpix.
 
     Returns ({tier: parquet shard path}, summary) when `shard_directory` is given and
@@ -1681,8 +1685,9 @@ def _izc_healpix_task(work_item):
     return healpix, shards, summary
 
 
-def run_izc_tiers(population, source_directory, tiers, output_paths, workers=1, shard_directory=None,
-                  windows_directory=None):
+def run_izc_tiers(
+    population, source_directory, tiers, output_paths, workers=1, shard_directory=None, windows_directory=None
+):
     """Generate the whole sample and write one parquet per tier. Returns (totals, per-tier summary).
 
     Ordered `imap` over the healpix in sorted order, not `imap_unordered`, so the row order of the
@@ -1719,13 +1724,21 @@ def run_izc_tiers(population, source_directory, tiers, output_paths, workers=1, 
         pool = context.Pool(
             workers,
             initializer=_izc_worker_initializer,
-            initargs=(str(source_directory), tuple(tiers), str(shard_directory),
-                      None if windows_directory is None else str(windows_directory)),
+            initargs=(
+                str(source_directory),
+                tuple(tiers),
+                str(shard_directory),
+                None if windows_directory is None else str(windows_directory),
+            ),
         )
         stream = pool.imap(_izc_healpix_task, work_items, chunksize=1)
     else:
-        _izc_worker_initializer(str(source_directory), tiers, str(shard_directory),
-                                None if windows_directory is None else str(windows_directory))
+        _izc_worker_initializer(
+            str(source_directory),
+            tiers,
+            str(shard_directory),
+            None if windows_directory is None else str(windows_directory),
+        )
         pool = None
         stream = (_izc_healpix_task(item) for item in work_items)
 

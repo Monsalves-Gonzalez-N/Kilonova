@@ -106,8 +106,10 @@ only changes the count.
 Parent reuse is NOT what that knob controls. Parents are drawn **with replacement**, so collisions
 set the reuse rather than the size of the pool: SN Ib and SN Ic come out at 1.59 copies per parent
 at 0.9 and would be 1.67 at 1.0, even though they ask for about as many objects as OpenUniverse has
-parents of those classes. What contains it is the leakage-aware split on `parent_key`, which keeps
-a parent and all of its copies on one side.
+parents of those classes. What contains it is the leakage-aware split, which reads the parent off
+the `object_id`: the izc is **training augmentation only**, validation and test hold OpenUniverse
+objects alone, and a copy whose parent landed in validation or test is dropped rather than trained
+on (`openuniverse_data._leakage_aware_split`, `group_key` v3, 2026-09-30).
 
 ## 3c. Train
 
@@ -116,9 +118,16 @@ python training/train_lightning.py --data-dir data/openuniverse
 ```
 
 The izc sample is IN by default — it exists to remove the redshift shortcut, so training without
-it is the ablation, and that is what `--no-izc` selects. The two mixes use different token caches
+it is the ablation, and that is what `--no-izc` selects. It only ever enters the training split:
+with or without the flag, validation and test are the same OpenUniverse objects, so the ablation
+and the baseline are scored on the same held-out set. The two mixes use different token caches
 (`openuniverse_tokens_izc.npz` and `openuniverse_tokens.npz`), so switching does not silently reuse
-the wrong one.
+the wrong one. A cache written before `group_key` v3 has no `is_izc` column and is rebuilt on load;
+the frozen test cut has to be re-cut too:
+
+```bash
+python training/build_token_cache.py --izc --cut-test
+```
 
 ## 4. Publish (never git — DVC)
 

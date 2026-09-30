@@ -14,7 +14,8 @@ entrenamiento.
 | `izc_windows_{deep,wide}.parquet` | contaminantes de OpenUniverse **re-renderizados** al z que al survey le falta | `kn-izc-windows`, 2026-09-09 |
 | `snana_catalogs/` | los 33 catalogos del release (135 MB, sin light curves) | descargados; entrada de `kn-izc-windows`, no producto |
 | `openuniverse_tokens.npz` | caché de tokens (`group_key` v2, split por transiente) | `training/openuniverse_data.py`, 2026-08-02 |
-| `openuniverse_tokens_test.npz` | recorte solo-test de la anterior | `training/run_evaluation_test_only.py`, 2026-08-02 |
+| `openuniverse_tokens_izc.npz` | caché con el izc; desde `group_key` v3 (2026-09-30) lleva `is_izc` y el izc es solo-train | `training/build_token_cache.py --izc` |
+| `openuniverse_tokens_test.npz` | recorte solo-test de la anterior; en v3 sale **sin izc** | `training/build_token_cache.py --izc --cut-test` |
 
 Los dos `.npz` son derivados y el pipeline los reconstruye solo, pero desde el **2026-08-04 se
 versionan igual**: bajándolos, el split evaluado es el mismo bit a bit en vez de solo el mismo

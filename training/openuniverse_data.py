@@ -16,6 +16,11 @@ TDE, SLSN-I, PISN). deep and wide are COMBINED into one model over a 6-band voca
 
 Leakage control: nothing is split per object, always per GROUP, and groups are GLOBAL across the
 deep/wide files, because both tiers observe the same underlying transient.
+    * izc (low-redshift re-renderings of OpenUniverse contaminants, `kn-izc-windows`) -> TRAIN
+      ONLY. They are data augmentation, not a catalogue: validation and test hold OpenUniverse
+      objects alone, so every reported metric describes the survey's own population. An izc object
+      enters train only when its PARENT did not land in validation or test; otherwise it is dropped,
+      never moved, so a held-out parent has no copy of itself on the training side.
     * KN  -> group = `simulation_id` (the physical ejecta model), read off the first field of the
       kn_object_id. 900 models each spawn many realizations (x angle_index x redshift x noise); a
       model must live in exactly one split.
@@ -97,7 +102,9 @@ REDSHIFT_DROPOUT_PROBABILITY = 0.50  # hide z from the model -> learned [NO_Z] t
 #   v1: contaminant groups were tier-namespaced (deep_<id> / wide_<id>) -> the two tiers of one
 #       transient landed in independent splits.
 #   v2: contaminant groups are the bare object_id, global across tiers.
-GROUP_KEY_VERSION = 2
+#   v3: meta carries `is_izc`, and the izc objects are train-only (an older cache has no way to
+#       tell them apart, so its split would still leak them into validation and test).
+GROUP_KEY_VERSION = 3
 
 # Magnitude normalization, fit on the TRAIN split inside build_dataloaders (module globals).
 MAG_MEAN = None
@@ -215,7 +222,8 @@ def _read_izc_parquet(path, tier):  # tier unused, for the same reason as the co
     -- same template, same shape, same host screen, same measured brightness. The object_id is
     `izc_{parent_key}_{z}_{index}` with `parent_key` = `snana_{healpix}_{id}`, so the group is the
     first three fields, and it is deliberately the SAME STRING the OpenUniverse contaminants carry:
-    if the parent itself is in the training set, its re-renderings land on its side of the split."""
+    `_leakage_aware_split` looks the parent up by it, and drops every re-rendering whose parent is
+    held out in validation or test."""
     return _read_long_parquet(path, lambda ids: np.array(["_".join(i.split("_")[1:4]) for i in ids]))
 
 
@@ -237,20 +245,20 @@ def _assemble(
     """Read every source into flat ragged arrays (CSR-style: one big array per field +
     per-object offsets) plus per-object metadata.
 
-    The izc sources are optional and are contaminants like any other: they carry the same window
-    schema and the same labels, and the only thing that makes them their own reader is what a group
-    is for the split."""
+    The izc sources are optional. They are contaminants for the label (same window schema, same
+    class names) but they are flagged in `meta["is_izc"]`, because the split treats them as training
+    augmentation and keeps them out of validation and test."""
     sources = [
         ("KN", _read_kn_parquet, kn_deep, "deep"),
         ("KN", _read_kn_parquet, kn_wide, "wide"),
         ("contaminant", _read_contaminants_parquet, contaminant_deep, "deep"),
         ("contaminant", _read_contaminants_parquet, contaminant_wide, "wide"),
-        ("contaminant", _read_izc_parquet, izc_deep, "deep"),
-        ("contaminant", _read_izc_parquet, izc_wide, "wide"),
+        ("izc", _read_izc_parquet, izc_deep, "deep"),
+        ("izc", _read_izc_parquet, izc_wide, "wide"),
     ]
     sources = [source for source in sources if source[2] is not None]
     bigs, counts_list = [], []
-    orig_label, redshift, group_key, is_kn = [], [], [], []
+    orig_label, redshift, group_key, is_kn, is_izc = [], [], [], [], []
     for kind, reader, path, tier in sources:
         start = time.time()
         big, counts, meta = reader(path, tier)
@@ -260,6 +268,7 @@ def _assemble(
         redshift.append(meta["redshift"])
         group_key.append(meta["group_key"])
         is_kn.append(np.full(len(counts), kind == "KN"))
+        is_izc.append(np.full(len(counts), kind == "izc"))
         if verbose:
             print(
                 f"  read {os.path.basename(path):32s} {len(counts):>8,} objects ({time.time() - start:.1f}s)"
@@ -279,6 +288,7 @@ def _assemble(
         "redshift": np.concatenate(redshift),
         "group_key": np.concatenate(group_key),
         "is_kn": np.concatenate(is_kn),
+        "is_izc": np.concatenate(is_izc),
     }
     return big, meta
 
@@ -320,6 +330,7 @@ def _load_or_build(
                 "redshift": cached["redshift"],
                 "group_key": cached["group_key"],
                 "is_kn": cached["is_kn"],
+                "is_izc": cached["is_izc"],
             }
             return big, meta
         print(
@@ -347,13 +358,20 @@ def _leakage_aware_split(meta, fractions, random_seed):
 
     The fractions apply to the group counts, so the resulting object counts drift a little from
     90/5/5 -- groups have unequal numbers of objects (a contaminant seen in both tiers weighs 2,
-    one seen only in deep weighs 1)."""
+    one seen only in deep weighs 1).
+
+    The izc objects take no part in the carving. They are training augmentation: after the
+    OpenUniverse catalogue is split, an izc object joins TRAIN when its parent group is not in
+    validation or test, and is DROPPED otherwise. Validation and test therefore hold OpenUniverse
+    objects only, and no held-out parent has a re-rendering of itself in train."""
     rng = np.random.default_rng(random_seed)
     train_fraction, validation_fraction, _ = fractions
     is_kn = meta["is_kn"]
+    is_izc = meta["is_izc"]
     group_key = meta["group_key"]
     orig_label = meta["orig_label"]
     index = np.arange(len(is_kn))
+    catalogue_index = index[~is_izc]
 
     train, validation, test = [], [], []
 
@@ -371,14 +389,23 @@ def _leakage_aware_split(meta, fractions, random_seed):
         validation.append(object_indices[split_of_object == 1])
         test.append(object_indices[split_of_object == 2])
 
-    carve_groups(index[is_kn])
+    carve_groups(catalogue_index[is_kn[catalogue_index]])
 
-    contaminant_index = index[~is_kn]
+    contaminant_index = catalogue_index[~is_kn[catalogue_index]]
     contaminant_labels = orig_label[contaminant_index]
     for class_name in np.unique(contaminant_labels):
         carve_groups(contaminant_index[contaminant_labels == class_name])
 
-    return (np.concatenate(train), np.concatenate(validation), np.concatenate(test))
+    train = np.concatenate(train)
+    validation = np.concatenate(validation)
+    test = np.concatenate(test)
+
+    izc_index = index[is_izc]
+    held_out_groups = np.union1d(group_key[validation], group_key[test])
+    parent_is_held_out = np.isin(group_key[izc_index], held_out_groups)
+    train = np.concatenate([train, izc_index[~parent_is_held_out]])
+
+    return (train, validation, test)
 
 
 # ----------------------------------------------------------------------------- dataset
@@ -526,9 +553,9 @@ def build_dataloaders(
     normalization on TRAIN detections, and return the dataloaders + metadata.
 
     `izc_deep` / `izc_wide` are optional: the re-rendered low-redshift contaminants of
-    `kn-izc-windows`. They enter as contaminants and their group is their PARENT, which is the same
-    group string the parent itself carries, so a parent and its re-renderings never straddle the
-    split."""
+    `kn-izc-windows`. They are TRAIN-ONLY augmentation: validation and test hold OpenUniverse
+    objects alone, and an izc object whose parent is held out there is dropped rather than trained
+    on (see `_leakage_aware_split`)."""
     global MAG_MEAN, MAG_STD, SIGMA_MAG_MEAN, SIGMA_MAG_STD
 
     big, meta = _load_or_build(
@@ -596,6 +623,14 @@ def build_dataloaders(
         labels = label_by_index[object_indices]
         return {"other": int((labels == 0).sum()), "KN": int((labels == 1).sum())}
 
+    is_izc = meta["is_izc"]
+    for name, object_indices in (("validation", validation_index), ("test", test_index)):
+        assert not is_izc[object_indices].any(), f"izc objects leaked into {name}"
+    izc_counts = {
+        "train": int(is_izc[train_index].sum()),
+        "dropped_held_out_parent": int(is_izc.sum() - is_izc[train_index].sum()),
+    }
+
     return {
         "train_loader": train_loader,
         "validation_loader": validation_loader,
@@ -617,4 +652,5 @@ def build_dataloaders(
             "validation": class_counts(validation_index),
             "test": class_counts(test_index),
         },
+        "izc": izc_counts,
     }

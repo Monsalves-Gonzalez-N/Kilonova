@@ -226,6 +226,7 @@ def train(
     regime_names = [regime["name"] for regime in regime_loaders]
     print(f"split sizes: {data['split_sizes']}")
     print(f"class balance: {data['class_balance']}")
+    print(f"izc (train-only augmentation): {data['izc']}")
     print(f"normalization: {data['normalization']}")
     print(f"validation regimes: {regime_names}")
 
@@ -347,7 +348,8 @@ def parse_arguments():
         "izc_windows_*.parquet",
     )
     # On by default: the izc sample exists to remove the redshift shortcut from the training set,
-    # so training without it is the ablation and not the baseline.
+    # so training without it is the ablation and not the baseline. It only ever enters TRAIN;
+    # validation and test are OpenUniverse alone with or without this flag.
     parser.add_argument(
         "--no-izc",
         dest="use_izc",

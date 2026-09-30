@@ -75,7 +75,11 @@ meta = {
     "redshift": cached["redshift"],
     "group_key": cached["group_key"],
     "is_kn": cached["is_kn"],
+    "is_izc": cached["is_izc"],
 }
+# The izc is training augmentation only; a test cut that carries any of it was made by an older
+# split and would score the model on objects the survey never produces.
+assert not meta["is_izc"].any(), "izc objects in the test cache"
 label_by_index = np.where(meta["is_kn"], 1, 0)
 test_index = np.arange(len(meta["is_kn"]))
 print(

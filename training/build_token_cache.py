@@ -39,7 +39,7 @@ SPLIT_SEED = _defaults["split_seed"].default
 DATA_DIR = "data/openuniverse"
 QUARANTINE = os.path.join(DATA_DIR, "_old_izc")
 TOKEN_KEYS = ("day", "band_index", "token_type_index", "mag", "sigma_mag")
-META_KEYS = ("offsets", "orig_label", "redshift", "group_key", "is_kn")
+META_KEYS = ("offsets", "orig_label", "redshift", "group_key", "is_kn", "is_izc")
 
 
 def quarantine(path, suffix):
@@ -58,6 +58,8 @@ def cut_test(cache_path, output_path):
     meta = {key: cached[key] for key in META_KEYS}
     _, _, test = _leakage_aware_split(meta, SPLIT_FRACTIONS, SPLIT_SEED)
     test = np.sort(np.asarray(test))
+    # El izc es augmentation solo de train: el recorte de test tiene que salir puro OpenUniverse.
+    assert not meta["is_izc"][test].any(), "izc objects in the test cut"
     offsets = cached["offsets"]
     # `offsets` marca donde empieza y termina cada objeto en el array plano de tokens, asi que el
     # recorte no es un slice: hay que copiar los tokens de cada objeto y rehacer los offsets.
@@ -114,8 +116,10 @@ def main():
         if moved:
             print(f"recorte anterior -> {moved}")
         objects, tokens = cut_test(cache_path, test_path)
-        print(f"{test_path}: {objects} objetos, {tokens} tokens, "
-              f"{os.path.getsize(test_path)/1e6:.0f} MB (recortado de {cache_name})")
+        print(
+            f"{test_path}: {objects} objetos, {tokens} tokens, "
+            f"{os.path.getsize(test_path)/1e6:.0f} MB (recortado de {cache_name})"
+        )
 
 
 if __name__ == "__main__":

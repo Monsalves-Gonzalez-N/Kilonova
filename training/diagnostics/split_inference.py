@@ -30,7 +30,7 @@ from openuniverse_data import (  # noqa: E402
 from train_lightning import MODEL_INPUT_KEYS, LitKilonova  # noqa: E402
 
 TOKEN_FIELDS = ["day", "band_index", "token_type_index", "mag", "sigma_mag"]
-META_FIELDS = ["offsets", "orig_label", "redshift", "group_key", "is_kn"]
+META_FIELDS = ["offsets", "orig_label", "redshift", "group_key", "is_kn", "is_izc"]
 NOT_OBSERVED_TOKEN = 2  # TOKEN_TYPE_ORDER = ["d", "u", "n"]
 DETECTION_TOKEN = 0
 
