@@ -47,7 +47,7 @@ def first_existing(candidates, default):
 DATA_DIR = first_existing(["data/openuniverse", "../data/openuniverse"], "../data/openuniverse")
 # El checkpoint por defecto es el de la generacion vigente; `KN_CHECKPOINT` lo cambia sin editar
 # el script, que es lo que hace falta para comparar dos corridas con las MISMAS figuras.
-CHECKPOINT = os.environ.get("KN_CHECKPOINT", "checkpoints/izc-2026-09-24/kilonova_transformer-soup.ckpt")
+CHECKPOINT = os.environ.get("KN_CHECKPOINT", "checkpoints/izc-trainonly-2026-09-30/kilonova_transformer-soup.ckpt")
 PLOTS_DIR = "plots"
 os.makedirs(PLOTS_DIR, exist_ok=True)
 C_CONTAMINANT = "#8338EC"
