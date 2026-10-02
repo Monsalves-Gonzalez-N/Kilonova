@@ -1,0 +1,44 @@
+% Requiere AASTeX (\tablecomments, \tablerefs), graphicx (\resizebox) y multirow.
+\begin{table*}
+\centering
+\caption{Transientes reales con fotometría de \textit{HST}/\textit{JWST} trasladada a las secuencias del HLTDS de \textit{Roman} y clasificados por el modelo. Cuando un objeto tiene dos épocas, se clasifica con ambas. Las magnitudes son las observadas (AB), en la columna de la banda de \textit{Roman} a la que corresponde cada filtro; antes de entrar al modelo se corrigieron por color al sistema de \textit{Roman} y se degradaron a la profundidad del tier correspondiente.}
+\label{tab:real_transients}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llclcccccccccl}
+\hline\hline
+Objeto & Clase & $z$ & Ventana & Fase\tablenotemark{a} & R & Z & Y & J & H & F & \multicolumn{2}{c}{$P(\mathrm{KN})$} & Ref. \\
+ & & & & (d, obs / rest) & & & & & & & con $z$ & sin $z$ & \\
+\hline
+\multirow{2}{*}{GRB 160821B} & \multirow{2}{*}{KN (sGRB)} & \multirow{2}{*}{0.162} & RJH & $+3.7/+3.2$ & $26.02\pm0.06$ & & & $24.82\pm0.05$ & $24.53\pm0.08$ & & \multirow{2}{*}{1.00} & \multirow{2}{*}{1.00} & \multirow{2}{*}{1} \\
+ & & & RJH & $+10.4/+9.0$ & $27.9\pm0.3$ & & & $26.9\pm0.4$ & $26.6\pm0.3$ & & & & \\[2pt]
+\multirow{2}{*}{GRB 160821B} & \multirow{2}{*}{KN (sGRB)} & \multirow{2}{*}{0.162} & RJH & $+3.7/+3.2$ & $25.90\pm0.06$ & & & $24.69\pm0.02$ & $24.43\pm0.03$ & & \multirow{2}{*}{1.00} & \multirow{2}{*}{1.00} & \multirow{2}{*}{2} \\
+ & & & RJH & $+10.5/+9.0$ & $27.55\pm0.11$ & & & $26.69\pm0.15$ & $26.55\pm0.23$ & & & & \\[2pt]
+AT2017gfo & KN (GW170817) & 0.0098 & RJH & $+9.8/+9.8$ & $22.88\pm0.07$\tablenotemark{b} & & & $20.57\pm0.04$ & $19.89\pm0.04$ & & 1.00 & 1.00 & 3 \\
+AT2025ulz & SN IIb (spec) & 0.0849 & RJH & $+8.8$--$10.4$\tablenotemark{c} & $21.78\pm0.02$ & & & $21.97\pm0.03$ & $22.26\pm0.04$ & & 0.00 & 0.85 & 4 \\
+HFF14Tom & SN Ia (spec), $\mu\approx2$ & 1.3457 & ZYJ & $\sim+25$ rest\tablenotemark{d} & & $25.03\pm0.05$ & $24.08\pm0.03$ & $24.01\pm0.04$\tablenotemark{e} & & & 0.00 & 0.99 & 5 \\
+\multirow{2}{*}{CLN12Did} & \multirow{2}{*}{SN Ia (fot.)} & \multirow{2}{*}{0.851} & RJH & $\geq+16$ rest\tablenotemark{f} & $24.35\pm0.02$\tablenotemark{b} & & & $23.68\pm0.01$ & $24.29\pm0.04$ & & \multirow{2}{*}{0.00} & \multirow{2}{*}{0.00} & \multirow{2}{*}{6} \\
+ & & & RZY\tablenotemark{g} & $\geq+23$ rest\tablenotemark{f} & $25.58\pm0.04$ & $23.83\pm0.02$ & $23.78\pm0.02$ & & & & & & \\[2pt]
+SN H0pe 2b & SN Ia (spec), $\mu\approx7.6$ & 1.783 & ZYJ / ZHF\tablenotemark{h} & $\sim+16$ rest\tablenotemark{d} & & $25.53\pm0.05$ & $24.69\pm0.06$ & $24.69\pm0.06$ & $23.93\pm0.07$ & $24.21\pm0.08$ & 0.00 / 0.00 & 1.00 / 1.00 & 7 \\
+SN H0pe 2c & SN Ia (spec), $\mu\approx6.4$ & 1.783 & ZYJ / ZHF\tablenotemark{h} & $\sim+34$ rest\tablenotemark{d} & & $28.71\pm0.11$ & $26.16\pm0.07$ & $26.16\pm0.07$ & $24.95\pm0.07$ & $25.25\pm0.08$ & 0.00 / 0.06 & 1.00 / 1.00 & 7 \\
+JADES JD22-16 & SN II (fot.) & 1.77 & ZYJ / ZHF & --\tablenotemark{i} & & 26.40 & 25.73 & 25.73 & 25.27 & 25.15 & 0.00 / 0.00 & 0.37 / 0.98 & 8 \\
+JADES JD22-17 & SN II (fot.) & 1.00 & ZYJ / ZHF & --\tablenotemark{i} & & 27.32 & 26.51 & 26.51 & 26.13 & 26.17 & 0.19 / 0.39 & 0.20 / 0.35 & 8 \\
+JADES JD22-1 & SN Ia (fot.) & 1.69 & ZYJ / ZHF & --\tablenotemark{i} & & 27.31 & 26.46 & 26.46 & 26.48 & 26.74 & 0.00 / 0.00 & 0.09 / 0.11 & 8 \\
+JADES JD22-3 & SN II (fot.) & 0.665 & ZYJ / ZHF & --\tablenotemark{i} & & 27.47 & 26.83 & 26.83 & 26.53 & 26.49 & 0.68 / 0.64 & 0.26 / 0.10 & 8 \\
+JADES JD22-2 & SN Ia (fot.) & 1.79 & ZYJ / ZHF & --\tablenotemark{i} & & 27.94 & 26.93 & 26.93 & 26.67 & 26.60 & 0.00 / 0.00 & 0.22 / 0.07 & 8 \\
+JADES JD23-14 & SN II (fot.) & 0.657 & ZHF\tablenotemark{j} & --\tablenotemark{i} & & 30.15 & 28.12 & 28.12 & 26.53 & 25.91 & 0.87 & 0.23 & 8 \\
+JADES JD23-24 & SN II (fot.) & 1.01 & ZYJ / ZHF & --\tablenotemark{i} & & 27.21 & 26.80 & 26.80 & 26.45 & 26.57 & 0.18 / 0.11 & 0.28 / 0.12 & 8 \\
+\hline
+\end{tabular}}
+\tablecomments{Filtros por banda de \textit{Roman}. \textit{HST}: R $=$ F606W, Z $=$ F814W, Y $=$ F105W, J $=$ F110W, H $=$ F160W. \textit{JWST}/NIRCam (H0pe y JADES): Z $=$ F090W, Y $=$ J $=$ F115W, H $=$ F150W, F $=$ F200W; por eso Y y J repiten el mismo valor. Las incertidumbres de JADES están en \citealt{DeCoursey2025}. En las filas con dos valores de $P(\mathrm{KN})$, el primero corresponde a la ventana ZYJ y el segundo a ZHF.
+$^{a}$~KNe: desde el trigger GRB o GW.
+$^{b}$~F625W.
+$^{c}$~Días observados desde la coincidencia con la alerta GW S250818k; la explosión de la SN no está acotada.
+$^{d}$~Explosión estimada como el pico menos 18\,d de subida en reposo; picos: HFF14Tom MJD 56816.3, H0pe 2b MJD 60037.8, H0pe 2c $=$ 2b $-48.6$\,d.
+$^{e}$~F125W.
+$^{f}$~Cota inferior desde la primera detección (el pico no está publicado); magnitudes convertidas de Vega a AB.
+$^{g}$~Separada 12.3\,d de la primera época, algo más que los 10\,d que abarca una ventana de entrenamiento.
+$^{h}$~Sólo la primera época; la segunda está 24\,d después y no cabe en una ventana.
+$^{i}$~Una sola época de diferencia de imágenes; fase desconocida.
+$^{j}$~Sin detección en ZYJ a la profundidad de \textit{Roman}.}
+\tablerefs{(1) \citealt{Troja2019}; (2) \citealt{Lamb2019}; (3) \citealt{Cowperthwaite2017}, compilada en \citealt{Villar2017}; (4) arXiv:2510.18854, tipo SN IIb en arXiv:2510.17104; (5) \citealt{Rodney2015}; (6) \citealt{Patel2014}; (7) \citealt{Pierel2024}; (8) \citealt{DeCoursey2025}.}
+\end{table*}
