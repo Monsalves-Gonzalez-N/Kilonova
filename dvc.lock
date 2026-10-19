@@ -29,8 +29,8 @@ stages:
       md5: 1f191f5b87a7cd4413e854643e9baf7a
       size: 392159086
   kilonova_windows:
-    cmd: kn-kilonova-windows --output-dir data/openuniverse --redshift-min 0.02
-      --redshift-max 1.0 --n-redshift 100 --redshift-spacing log
+    cmd: kn-kilonova-windows --output-dir data/openuniverse --redshift-min 0.02 
+      --redshift-max 1.0 --n-redshift 100 --redshift-spacing log 
       --realizations-per-redshift 10000
     deps:
     - path: data/dust_generation/lanl_spectra.parquet
@@ -39,16 +39,16 @@ stages:
       size: 10963401855
     - path: src/kilonova/photometry/roman_noise.py
       hash: md5
-      md5: f7b10c7aae448b6b42388df87f893c5d
-      size: 11567
+      md5: 914c700fc06f8db056e2adab1b331ebd
+      size: 11969
     - path: src/kilonova/photometry/spectra.py
       hash: md5
       md5: 4fb42a62ec0cb0211734e4f282f02922
       size: 6171
     - path: src/kilonova/simulation/early_windows.py
       hash: md5
-      md5: ac308fa864036344fc7a072794fa468b
-      size: 30869
+      md5: 03b9d4a27e6dec55a203f6c29991cabd
+      size: 35083
     params:
       params.yaml:
         kilonova_windows:
@@ -60,12 +60,12 @@ stages:
     outs:
     - path: data/openuniverse/kn_windows_deep.parquet
       hash: md5
-      md5: f5d2a3530e6cb08eb7dee578730589f4
-      size: 460323988
+      md5: ae5d56ded280fa1bb657508c03e6f990
+      size: 470944792
     - path: data/openuniverse/kn_windows_wide.parquet
       hash: md5
-      md5: e15039c2593e0c1a696f279c82834728
-      size: 397000718
+      md5: 0ab9ed235ee3da2ccf176a31d2a38285
+      size: 405774464
   izc_windows:
     cmd: kn-izc-windows --output-dir data/openuniverse --deficit-scale 0.9
     deps:
