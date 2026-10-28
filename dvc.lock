@@ -9,25 +9,25 @@ stages:
       size: 10963401855
     - path: src/kilonova/photometry/roman_noise.py
       hash: md5
-      md5: f7b10c7aae448b6b42388df87f893c5d
-      size: 11567
+      md5: 914c700fc06f8db056e2adab1b331ebd
+      size: 11969
     - path: src/kilonova/photometry/spectra.py
       hash: md5
       md5: 4fb42a62ec0cb0211734e4f282f02922
       size: 6171
     - path: src/kilonova/simulation/early_windows.py
       hash: md5
-      md5: ac308fa864036344fc7a072794fa468b
-      size: 30869
+      md5: 03b9d4a27e6dec55a203f6c29991cabd
+      size: 35083
     outs:
     - path: data/openuniverse/early_windows_deep.parquet
       hash: md5
-      md5: 6890271338be52bce019d1ac8ae66267
-      size: 480950581
+      md5: aeccd1135398511933e6a0f05c0c7288
+      size: 512110138
     - path: data/openuniverse/early_windows_wide.parquet
       hash: md5
-      md5: 1f191f5b87a7cd4413e854643e9baf7a
-      size: 392159086
+      md5: 34012d9813801da33656795ac45013cb
+      size: 423815528
   kilonova_windows:
     cmd: kn-kilonova-windows --output-dir data/openuniverse --redshift-min 0.02 
       --redshift-max 1.0 --n-redshift 100 --redshift-spacing log 
@@ -67,50 +67,77 @@ stages:
       md5: 0ab9ed235ee3da2ccf176a31d2a38285
       size: 405774464
   izc_windows:
-    cmd: kn-izc-windows --output-dir data/openuniverse --deficit-scale 0.9
+    cmd: kn-izc-windows --output-dir data/openuniverse --deficit-scale 0.9 
+      --brightness window
     deps:
     - path: data/openuniverse/cc_templates.npz
       hash: md5
-      md5: 48776b766c578d158e96ddbfb47539aa
-      size: 24057989
+      md5: 776d3a18615168f5a7f6614ca6f61afc
+      size: 124567687
     - path: data/openuniverse/early_windows_deep.parquet
       hash: md5
-      md5: 6890271338be52bce019d1ac8ae66267
-      size: 480950581
+      md5: aeccd1135398511933e6a0f05c0c7288
+      size: 512110138
     - path: data/openuniverse/early_windows_wide.parquet
       hash: md5
-      md5: 1f191f5b87a7cd4413e854643e9baf7a
-      size: 392159086
+      md5: 34012d9813801da33656795ac45013cb
+      size: 423815528
+    - path: data/openuniverse/iax_templates.npz
+      hash: md5
+      md5: 7b4738195482bb19df451a7a55cf4a5f
+      size: 356058610
     - path: data/openuniverse/kn_windows_deep.parquet
       hash: md5
-      md5: f5d2a3530e6cb08eb7dee578730589f4
-      size: 460323988
+      md5: ae5d56ded280fa1bb657508c03e6f990
+      size: 470944792
     - path: data/openuniverse/kn_windows_wide.parquet
       hash: md5
-      md5: e15039c2593e0c1a696f279c82834728
-      size: 397000718
+      md5: 0ab9ed235ee3da2ccf176a31d2a38285
+      size: 405774464
+    - path: data/openuniverse/salt3_nir_waveext
+      hash: md5
+      md5: 9958016a382ceca029c2478c12560bf6.dir
+      size: 17459498
+      nfiles: 8
+    - path: data/openuniverse/slsn_template.npz
+      hash: md5
+      md5: 8f7df9f8b303a570bdbd69cfffe6242f
+      size: 783958
+    - path: data/openuniverse/tde_template.npz
+      hash: md5
+      md5: c0eb5d8b1a5bde8eb6061bdcf3039b1f
+      size: 717491
+    - path: data/openuniverse/template_phase_anchor.csv
+      hash: md5
+      md5: 80ed10d1c1f538a20b686c5172e8c8b2
+      size: 4497
     - path: src/kilonova/photometry/roman_noise.py
       hash: md5
-      md5: f7b10c7aae448b6b42388df87f893c5d
-      size: 11567
+      md5: 914c700fc06f8db056e2adab1b331ebd
+      size: 11969
     - path: src/kilonova/simulation/intermediate_z_contaminants.py
       hash: md5
-      md5: f4cd61479151f52d22ea10b984b3f8f6
-      size: 113015
+      md5: 2119f284c47a632c11b0b75369d37b42
+      size: 102418
     - path: src/kilonova/simulation/openuniverse_parents.py
       hash: md5
-      md5: 2178ba896fc6196d2b0f4d88dfba3e66
-      size: 8966
+      md5: cbc6b59bd0c0bbf8b69fe1d1b54461d2
+      size: 9637
+    - path: src/kilonova/simulation/window_anchor.py
+      hash: md5
+      md5: 44996d96af412026721c76622ee838dc
+      size: 13037
     params:
       params.yaml:
         izc_windows:
           deficit_scale: 0.9
+          brightness_source: window
     outs:
     - path: data/openuniverse/izc_windows_deep.parquet
       hash: md5
-      md5: ee9932d0c2beb8dc7f479e72a05df02f
-      size: 408128390
+      md5: e9f028079dc8df0372ddf00906a62de6
+      size: 440563313
     - path: data/openuniverse/izc_windows_wide.parquet
       hash: md5
-      md5: 3d20fd32982c1c7cae69f0e39f301245
-      size: 408036947
+      md5: 131f254a7303428d0c17f43636d156d6
+      size: 440550208
