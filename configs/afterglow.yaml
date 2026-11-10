@@ -1,0 +1,75 @@
+# Parameter space of the GRB afterglow contaminants (kilonova.simulation.afterglow_contaminants).
+# One continuous population, no short/long classes and no shaped priors: every parameter is drawn
+# log-uniform or uniform between two limits, the scheme of the fitting priors of Aksulu et al.
+# (2022, MNRAS 511, 2848, Table 3).
+
+# Physical parameters: exact minimum and maximum of the values inferred for 38 short GRBs
+# (Fong et al. 2015, ApJ 815, 102, Table 3) and 26 short + long GRBs (Aksulu et al. 2022,
+# Tables 5 and 6). The burst that sets each limit is named next to it.
+physical:
+  isotropic_energy_erg:
+    minimum: 2.1e+49   # Fong: GRB 090607
+    maximum: 1.35e+55  # Aksulu: GRB 000926
+    sampling: log_uniform
+  density_cm3:
+    minimum: 5.3e-6    # Fong: GRB 150101B
+    maximum: 389.0     # Aksulu: GRB 030329 (constant-density fits only)
+    sampling: log_uniform
+  electron_index:
+    # Observed range is 1.46 (Aksulu: GRB 130702A) to 3.00 (Fong: GRB 140129B); afterglowpy
+    # requires p > 2 unless the EpsEBar spectrum flag is set, so the floor is the code's.
+    minimum: 2.01
+    maximum: 3.0
+    sampling: uniform
+  epsilon_e:
+    minimum: 0.1       # Fong: fixed value of every fit
+    maximum: 0.912     # Aksulu: GRB 970508
+    sampling: log_uniform
+  epsilon_b:
+    minimum: 1.78e-8   # Aksulu: GRB 200522A
+    maximum: 0.912     # Aksulu: GRB 130907A
+    sampling: log_uniform
+
+# Geometry: not taken from the literature. The observed samples are gamma-ray triggered and
+# therefore on-axis, so they cannot bound the viewing angle of an orphan afterglow.
+geometry:
+  core_angle_rad:
+    minimum: 0.01
+    maximum: 1.5707963  # afterglowpy accepts thetaCore in (0, pi/2]
+    sampling: log_uniform
+  viewing_angle_rad:
+    # Randomly oriented jet. Beyond pi/2 the observer sees the counter-jet side, which
+    # afterglowpy leaves dark by default.
+    minimum: 0.0
+    maximum: 1.5707963
+    sampling: isotropic
+  wing_over_core: 4.0   # thetaWing = wing_over_core * thetaCore, capped at pi/2
+
+# Host dust: exponential A_V whose median is that of the 22 long GRBs of Aksulu et al. (2022,
+# Table 5); a fraction equal to the short-GRB fraction of Swift/BAT (90 of 940; Lien et al.
+# 2016, ApJ 829, 7) carries no dust. SMC bar curve of Gordon et al. (2003), applied rest-frame.
+host_extinction:
+  median_av: 0.15
+  dust_free_fraction: 0.096
+
+# Configurations whose true magnitude is brighter than this in any Roman band at any visit are
+# discarded: they sit at the saturation limit of the WFI. 15.0 is the bright end of NASA's
+# "time to saturation for point source imaging" table (run_time_to_saturation_20210614), where
+# a point source saturates in 4.8 s (F062) to 17.2 s (F184), against 3.04 s per read.
+saturation:
+  bright_limit_magnitude: 15.0
+
+# Wider than the kilonova grid (0.01 to 1): afterglows stay detectable well beyond z = 1.
+# The upper limit is also where the bluest point of the wavelength grid reaches the 0.1 micron
+# edge of the SMC curve.
+redshift:
+  minimum: 0.02
+  maximum: 3.0
+  sampling: log_uniform
+
+# Observer-frame days between the burst and the first survey visit, as for the kilonovae
+# (early_windows.EXPLOSION_OFFSET_MAX_DAYS).
+first_visit_time_days:
+  minimum: 0.0
+  maximum: 5.0
+  sampling: uniform
