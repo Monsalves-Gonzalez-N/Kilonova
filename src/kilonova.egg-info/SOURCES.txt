@@ -10,6 +10,7 @@ src/kilonova.egg-info/entry_points.txt
 src/kilonova.egg-info/requires.txt
 src/kilonova.egg-info/top_level.txt
 src/kilonova/cli/__init__.py
+src/kilonova/cli/afterglow_windows.py
 src/kilonova/cli/cache_lanl.py
 src/kilonova/cli/early_windows.py
 src/kilonova/cli/extinguish.py
@@ -22,11 +23,13 @@ src/kilonova/photometry/__init__.py
 src/kilonova/photometry/roman_noise.py
 src/kilonova/photometry/spectra.py
 src/kilonova/simulation/__init__.py
+src/kilonova/simulation/afterglow_contaminants.py
 src/kilonova/simulation/early_windows.py
 src/kilonova/simulation/extinction.py
 src/kilonova/simulation/intermediate_z_contaminants.py
 src/kilonova/simulation/lanl_cache.py
 src/kilonova/simulation/openuniverse_parents.py
+src/kilonova/simulation/window_anchor.py
 src/kilonova/validation/__init__.py
 src/kilonova/validation/csp.py
 tests/test_config.py
@@ -36,5 +39,8 @@ tests/test_early_windows.py
 tests/test_extinction.py
 tests/test_intermediate_z_contaminants.py
 tests/test_lanl_cache.py
+tests/test_openuniverse_data_split.py
 tests/test_roman_noise.py
+tests/test_run_all_openuniverse.py
 tests/test_spectra.py
+tests/test_window_anchor.py

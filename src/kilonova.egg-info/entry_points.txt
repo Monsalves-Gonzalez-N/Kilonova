@@ -1,4 +1,5 @@
 [console_scripts]
+kn-afterglow-windows = kilonova.cli.afterglow_windows:main
 kn-cache-lanl = kilonova.cli.cache_lanl:main
 kn-early-windows = kilonova.cli.early_windows:main
 kn-extinguish = kilonova.cli.extinguish:main

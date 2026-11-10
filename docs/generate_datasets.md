@@ -14,6 +14,7 @@ Regenerate the FOUR classification datasets after two changes committed on 2026-
 | Contaminants deep + wide | `kn-run-openuniverse` | `data/openuniverse/early_windows_{deep,wide}.parquet` |
 | Kilonovae deep + wide | `kn-kilonova-windows` | `data/openuniverse/kn_windows_{deep,wide}.parquet` |
 | Low-redshift contaminants (izc) | `kn-izc-windows` | `data/openuniverse/izc_windows_{deep,wide}.parquet` |
+| GRB afterglows | `kn-afterglow-windows` | `data/openuniverse/afterglow_windows_{deep,wide}.parquet` + `afterglow_parameters.parquet` |
 
 ## Prerequisites
 
@@ -111,6 +112,28 @@ the `object_id`: the izc is **training augmentation only**, validation and test 
 objects alone, and a copy whose parent landed in validation or test is dropped rather than trained
 on (`openuniverse_data._leakage_aware_split`, `group_key` v3, 2026-09-30).
 
+## 3d. GRB afterglows (independent of OpenUniverse; needs `afterglowpy`)
+
+```bash
+kn-afterglow-windows --n-afterglows 500000 --seed 0 --workers 30
+```
+
+One more contaminant class, added on 2026-11-10 because the model trained without it took every
+afterglow it was shown for a kilonova. It is NOT a re-rendering of anything: `afterglowpy`
+(Gaussian structured jet, forward-shock synchrotron) evaluated over the parameter space of
+`configs/afterglow.yaml` — physical parameters between the extremes of Fong et al. (2015) and
+Aksulu et al. (2022), free geometry with an isotropic viewing angle, host dust with an SMC curve,
+log-uniform z in 0.02–3 — then the same noise recipe, 5 d cadence and window logic as the
+kilonovae (`early_windows.build_window_from_model`, with its own `cadence_parity`). Of every draw
+~0.24 leaves a window in deep and ~0.22 in wide, 65 % are too faint for either tier and 5 % are
+discarded for being **brighter than 15 mag** at some visit and band (the WFI saturation limit), so
+500 000 draws are ~118 000 afterglows per tier, the size of SN Ib or SN Ic in OpenUniverse.
+`afterglow_parameters.parquet` keeps every draw with what happened to it. 116 draws/s on 30
+workers, 75 min; the run writes chunks under `afterglow_parts/` and resumes if interrupted. The
+object ids are `afterglow_{id}`, the same in both tiers, so the two views of one afterglow are one
+split group, and the class (`GRB afterglow`) is in train, validation **and** test like any other
+contaminant — it is there to be scored, not as augmentation. Smoke test with `--n-afterglows 2000`.
+
 ## 3c. Train
 
 ```bash
@@ -120,23 +143,30 @@ python training/train_lightning.py --data-dir data/openuniverse
 The izc sample is IN by default — it exists to remove the redshift shortcut, so training without
 it is the ablation, and that is what `--no-izc` selects. It only ever enters the training split:
 with or without the flag, validation and test are the same OpenUniverse objects, so the ablation
-and the baseline are scored on the same held-out set. The two mixes use different token caches
-(`openuniverse_tokens_izc.npz` and `openuniverse_tokens.npz`), so switching does not silently reuse
-the wrong one. A cache written before `group_key` v3 has no `is_izc` column and is rebuilt on load;
-the frozen test cut has to be re-cut too:
+and the baseline are scored on the same held-out set. The GRB afterglows are IN by default too
+(`--no-afterglow` is the ablation) and, unlike the izc, they are in every split. Each source mix has
+its own token cache (`openuniverse_data.token_cache_name`: `openuniverse_tokens_izc_afterglow.npz`
+for the default mix), so switching a flag does not silently reuse the wrong one.
+
+**Saturation cut (2026-11-10).** When the loader reads any source it drops every object whose true
+magnitude is brighter than `BRIGHT_LIMIT_MAG = 15.0` in some band at some epoch of its window,
+observed or not — the same limit the afterglow generator applies over its 8 visits. On the current
+parquets it touches nothing in the KN and OpenUniverse files and ~14 000 (deep) / ~19 000 (wide)
+izc objects, almost all SLSN-I re-rendered at very low z. That changed the object set, so the cache
+is `group_key` v4: an older cache is rebuilt on load, and the frozen test cut has to be re-cut too:
 
 ```bash
-python training/build_token_cache.py --izc --cut-test
+python training/build_token_cache.py --izc --afterglow --cut-test
 ```
 
 ## 4. Publish (never git — DVC)
 
-All six parquets are outputs of `dvc.yaml` STAGES, not free-standing `dvc add` files, so `dvc add`
+All nine parquets are outputs of `dvc.yaml` STAGES, not free-standing `dvc add` files, so `dvc add`
 refuses them ("overlaps with an output of stage"). Record them with `dvc commit`, which writes the
 hashes of what is on disk into `dvc.lock` without re-running anything:
 
 ```bash
-dvc commit -f early_windows kilonova_windows izc_windows
+dvc commit -f early_windows kilonova_windows izc_windows afterglow_windows
 dvc push
 git add dvc.lock dvc.yaml params.yaml
 git commit -m "Regenerar los datasets"

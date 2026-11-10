@@ -94,3 +94,26 @@ stages:
     outs:
       - data/openuniverse/izc_windows_deep.parquet
       - data/openuniverse/izc_windows_wide.parquet
+
+  # Afterglows de GRB: una clase contaminante mas, independiente de OpenUniverse (afterglowpy sobre
+  # el espacio de parametros de configs/afterglow.yaml). Comparte con las KN la receta de ruido, la
+  # cadencia y la logica de ventana (early_windows.build_window_from_model). El parquet de
+  # parametros guarda que paso con cada sorteo (ventana, demasiado debil, saturado, fallo).
+  afterglow_windows:
+    cmd: >-
+      kn-afterglow-windows
+      --output-dir data/openuniverse
+      --n-afterglows ${afterglow_windows.n_afterglows}
+      --seed ${afterglow_windows.seed}
+    params:
+      - afterglow_windows
+    deps:
+      - configs/afterglow.yaml
+      - src/kilonova/simulation/afterglow_contaminants.py
+      - src/kilonova/simulation/early_windows.py
+      - src/kilonova/photometry/roman_noise.py
+      - src/kilonova/photometry/spectra.py
+    outs:
+      - data/openuniverse/afterglow_windows_deep.parquet
+      - data/openuniverse/afterglow_windows_wide.parquet
+      - data/openuniverse/afterglow_parameters.parquet

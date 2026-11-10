@@ -3,7 +3,10 @@
 Entrena `KilonovaTransformer` sobre las **ventanas tempranas de OpenUniverse**: contaminantes
 Roman (`early_windows_{deep,wide}.parquet`) + kilonovas LANL inyectadas
 (`kn_windows_{deep,wide}.parquet`), generados por el pipeline de `src/kilonova/`.
-Clasificación binaria `{KN, other}`. Con la grilla KN del 2026-07-30 son ~1.3M kilonovas
+Más los afterglows de GRB (`afterglow_windows_{deep,wide}.parquet`, `kn-afterglow-windows`),
+una clase contaminante independiente de OpenUniverse, y las re-renderizaciones izc solo en train.
+Toda fuente pasa por el corte de saturación: fuera lo más brillante que 15 mag
+(`openuniverse_data.BRIGHT_LIMIT_MAG`). Clasificación binaria `{KN, other}`. Con la grilla KN del 2026-07-30 son ~1.3M kilonovas
 (721 773 deep + 590 914 wide) frente a ~1.6M contaminantes, mucho más balanceado que las ~324k KN
 de los `kilonova_windows_*.hdf5` de junio, que quedaron obsoletos (fotometría con tres bugs y sin
 el factor angular; ver `data/openuniverse/README.md`).

@@ -15,7 +15,9 @@ Requires-Dist: matplotlib
 Requires-Dist: torch
 Requires-Dist: specutils
 Requires-Dist: dust_extinction
+Requires-Dist: sncosmo
 Requires-Dist: dustmaps
+Requires-Dist: afterglowpy
 Provides-Extra: sim
 Requires-Dist: pyphot; extra == "sim"
 Requires-Dist: ray; extra == "sim"

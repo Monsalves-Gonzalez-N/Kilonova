@@ -8,7 +8,10 @@ vieja y no avisa. Regenerar los datos obliga a borrar la cache a mano, y esto lo
 mano. Se corta del MISMO split que el entrenamiento usa -- `_leakage_aware_split` con su semilla --
 asi que sale de la cache que el entrenamiento carga, que desde 2026-09 es la del izc.
 
-    python training/build_token_cache.py --izc --cut-test
+    python training/build_token_cache.py --izc --afterglow --cut-test
+
+Los dos flags van encendidos por defecto; `--no-izc` / `--no-afterglow` construyen la cache de la
+ablacion correspondiente (cada mezcla tiene su propio fichero, ver `token_cache_name`).
 """
 
 import argparse
@@ -27,6 +30,7 @@ from openuniverse_data import (  # noqa: E402
     _leakage_aware_split,
     _load_or_build,
     build_dataloaders,
+    token_cache_name,
 )
 
 # El split del recorte tiene que ser EL MISMO que el del entrenamiento, asi que sus parametros se
@@ -87,12 +91,14 @@ def main():
     parser.add_argument("--data-dir", default=DATA_DIR)
     parser.add_argument("--izc", dest="izc", action="store_true", default=True)
     parser.add_argument("--no-izc", dest="izc", action="store_false")
+    parser.add_argument("--afterglow", dest="afterglow", action="store_true", default=True)
+    parser.add_argument("--no-afterglow", dest="afterglow", action="store_false")
     parser.add_argument("--cut-test", action="store_true", help="rehacer openuniverse_tokens_test.npz")
     parser.add_argument("--suffix", default=time.strftime("stale-%Y-%m-%d"))
     arguments = parser.parse_args()
 
     data_dir = arguments.data_dir
-    cache_name = "openuniverse_tokens_izc.npz" if arguments.izc else "openuniverse_tokens.npz"
+    cache_name = token_cache_name(arguments.izc, arguments.afterglow)
     cache_path = os.path.join(data_dir, cache_name)
     moved = quarantine(cache_path, arguments.suffix)
     if moved:
@@ -107,8 +113,14 @@ def main():
         contaminant_wide=os.path.join(data_dir, "early_windows_wide.parquet"),
         izc_deep=os.path.join(data_dir, "izc_windows_deep.parquet") if arguments.izc else None,
         izc_wide=os.path.join(data_dir, "izc_windows_wide.parquet") if arguments.izc else None,
+        afterglow_deep=os.path.join(data_dir, "afterglow_windows_deep.parquet")
+        if arguments.afterglow
+        else None,
+        afterglow_wide=os.path.join(data_dir, "afterglow_windows_wide.parquet")
+        if arguments.afterglow
+        else None,
     )
-    print(f"{cache_path}: {os.path.getsize(cache_path)/1e9:.2f} GB en {time.time()-start:.0f} s")
+    print(f"{cache_path}: {os.path.getsize(cache_path) / 1e9:.2f} GB en {time.time() - start:.0f} s")
 
     if arguments.cut_test:
         test_path = os.path.join(data_dir, "openuniverse_tokens_test.npz")
@@ -118,7 +130,7 @@ def main():
         objects, tokens = cut_test(cache_path, test_path)
         print(
             f"{test_path}: {objects} objetos, {tokens} tokens, "
-            f"{os.path.getsize(test_path)/1e6:.0f} MB (recortado de {cache_name})"
+            f"{os.path.getsize(test_path) / 1e6:.0f} MB (recortado de {cache_name})"
         )
 
 

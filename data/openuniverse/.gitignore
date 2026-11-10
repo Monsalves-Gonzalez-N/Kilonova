@@ -8,3 +8,6 @@
 # Logs de regeneracion: se escriben al lado del output, no son fuente.
 /*_regen_*.log
 /openuniverse_tokens_izc.npz
+/openuniverse_tokens_izc_afterglow.npz
+# Bloques intermedios de kn-afterglow-windows; el merge final son los afterglow_*.parquet.
+/afterglow_parts

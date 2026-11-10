@@ -4,8 +4,9 @@ Run locally on GPU:
     python train_lightning.py --data-dir data/openuniverse --epochs 150
 
 Binary classification {KN, other}: LANL kilonovas (kn_windows_*.parquet) vs Roman
-contaminants (early_windows_*.parquet). Inverse-frequency class weights, AdamW,
-loss + accuracy metrics; model selection by val_acc_noz.
+contaminants (early_windows_*.parquet, plus the GRB afterglows of afterglow_windows_*.parquet and
+the train-only izc re-renderings). Inverse-frequency class weights, AdamW, loss + accuracy
+metrics; model selection by val_acc_noz.
 """
 
 import argparse
@@ -17,7 +18,7 @@ import torch
 import torch.nn as nn
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from model import KilonovaTransformer
-from openuniverse_data import GROUP_ORDER, build_dataloaders
+from openuniverse_data import GROUP_ORDER, build_dataloaders, token_cache_name
 from torchmetrics import MeanMetric
 from torchmetrics.classification import MulticlassAccuracy
 
@@ -177,6 +178,7 @@ class LitKilonova(L.LightningModule):
 def train(
     data_dir,
     use_izc,
+    use_afterglow,
     epochs,
     batch_size,
     learning_rate,
@@ -206,7 +208,16 @@ def train(
                 f"{path} is missing: run `kn-izc-windows` or `dvc pull` it, or pass --no-izc to "
                 "train on the OpenUniverse contaminants alone"
             )
-    cache_name = "openuniverse_tokens_izc.npz" if use_izc else "openuniverse_tokens.npz"
+    # The GRB afterglows are one more contaminant class, in train, validation and test alike.
+    afterglow_deep = os.path.join(data_dir, "afterglow_windows_deep.parquet") if use_afterglow else None
+    afterglow_wide = os.path.join(data_dir, "afterglow_windows_wide.parquet") if use_afterglow else None
+    for path in (afterglow_deep, afterglow_wide):
+        if path is not None and not os.path.exists(path):
+            raise SystemExit(
+                f"{path} is missing: run `kn-afterglow-windows` or `dvc pull` it, or pass "
+                "--no-afterglow to train without the GRB afterglows"
+            )
+    cache_name = token_cache_name(use_izc, use_afterglow)
 
     data = build_dataloaders(
         kn_deep=os.path.join(data_dir, "kn_windows_deep.parquet"),
@@ -215,11 +226,14 @@ def train(
         contaminant_wide=os.path.join(data_dir, "early_windows_wide.parquet"),
         izc_deep=izc_deep,
         izc_wide=izc_wide,
+        afterglow_deep=afterglow_deep,
+        afterglow_wide=afterglow_wide,
         batch_size=batch_size,
         num_workers=num_workers,
         cache_path=os.path.join(data_dir, cache_name),
     )
     print(f"low-redshift contaminants (izc): {'IN' if use_izc else 'OUT'}")
+    print(f"GRB afterglows: {'IN' if use_afterglow else 'OUT'}")
     train_loader = data["train_loader"]
     regime_loaders = data["validation_regime_loaders"]
     validation_loaders = [regime["loader"] for regime in regime_loaders]
@@ -344,8 +358,8 @@ def parse_arguments():
     parser.add_argument(
         "--data-dir",
         default="data/openuniverse",
-        help="directory holding the kn_windows_*.parquet, early_windows_*.parquet and "
-        "izc_windows_*.parquet",
+        help="directory holding the kn_windows_*.parquet, early_windows_*.parquet, "
+        "afterglow_windows_*.parquet and izc_windows_*.parquet",
     )
     # On by default: the izc sample exists to remove the redshift shortcut from the training set,
     # so training without it is the ablation and not the baseline. It only ever enters TRAIN;
@@ -356,6 +370,14 @@ def parse_arguments():
         action="store_false",
         help="train on the OpenUniverse contaminants alone, without the re-rendered low-redshift "
         "ones (the ablation)",
+    )
+    # On by default since 2026-11-10: the model trained without them took the afterglows for
+    # kilonovae, so training without them is the ablation.
+    parser.add_argument(
+        "--no-afterglow",
+        dest="use_afterglow",
+        action="store_false",
+        help="train without the GRB afterglow contaminants (the ablation)",
     )
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch-size", type=int, default=512)
@@ -391,6 +413,7 @@ if __name__ == "__main__":
     train(
         data_dir=arguments.data_dir,
         use_izc=arguments.use_izc,
+        use_afterglow=arguments.use_afterglow,
         epochs=arguments.epochs,
         batch_size=arguments.batch_size,
         learning_rate=arguments.learning_rate,

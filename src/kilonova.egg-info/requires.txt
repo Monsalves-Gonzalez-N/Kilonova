@@ -9,7 +9,9 @@ matplotlib
 torch
 specutils
 dust_extinction
+sncosmo
 dustmaps
+afterglowpy
 
 [dev]
 pytest

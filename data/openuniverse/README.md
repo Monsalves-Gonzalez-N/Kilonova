@@ -1,6 +1,6 @@
 # `data/openuniverse/` — qué archivo es cuál
 
-Estado a **2026-10-19**. Este directorio acumula varias generaciones de los mismos datos, así que
+Estado a **2026-11-10**. Este directorio acumula varias generaciones de los mismos datos, así que
 la regla es: **el nombre limpio es el bueno; cualquier sufijo después de la extensión es una
 generación superada que se conserva solo para comparar.** Nada con sufijo debe entrar a un
 entrenamiento.
@@ -12,10 +12,13 @@ entrenamiento.
 | `early_windows_{deep,wide}.parquet` | contaminantes OpenUniverse (SN, TDE, SLSN, PISN) | `kn-run-openuniverse`, 2026-09-18 (`early_windows_regen_2026-09-18.log`) |
 | `kn_windows_{deep,wide}.parquet` | kilonovas LANL inyectadas, z sorteado dentro de cada bin | `kn-kilonova-windows`, 2026-09-16 (`_old_izc/kn_windows_regen_2026-09-16.log`) |
 | `izc_windows_{deep,wide}.parquet` | contaminantes de OpenUniverse **re-renderizados** al z que al survey le falta | `kn-izc-windows`, 2026-09-22 (`izc_regen_2026-09-22.log`) |
+| `afterglow_windows_{deep,wide}.parquet` | afterglows de GRB (`afterglowpy`), una clase contaminante mas, en train/val/test | `kn-afterglow-windows`, 2026-11-10 (`afterglow_regen_2026-11-10.log`) |
+| `afterglow_parameters.parquet` | los 500 000 sorteos de la anterior con su destino (ventana / debil / saturado / fallo) | idem |
 | `snana_catalogs/` | los 33 catalogos del release (135 MB, sin light curves) | descargados; entrada de `kn-izc-windows`, no producto |
 | `openuniverse_tokens.npz` | caché de tokens (`group_key` v2, split por transiente) | `training/openuniverse_data.py`, 2026-08-02 |
-| `openuniverse_tokens_izc.npz` | caché con el izc; desde `group_key` v3 (2026-09-30) lleva `is_izc` y el izc es solo-train | `training/build_token_cache.py --izc` |
-| `openuniverse_tokens_test.npz` | recorte solo-test de la anterior; en v3 sale **sin izc** | `training/build_token_cache.py --izc --cut-test` |
+| `openuniverse_tokens_izc.npz` | caché con el izc; `group_key` v3 (2026-09-30), **superada** por la siguiente | `training/build_token_cache.py --izc --no-afterglow` |
+| `openuniverse_tokens_izc_afterglow.npz` | caché vigente: izc + afterglows, `group_key` v4 (2026-11-10) = corte de saturacion a 15 mag en todas las fuentes | `training/build_token_cache.py --izc --afterglow` |
+| `openuniverse_tokens_test.npz` | recorte solo-test de la vigente; sale **sin izc** y **con afterglows** | `training/build_token_cache.py --izc --afterglow --cut-test` |
 
 Las `kn_windows_*` vigentes son las que entrenaron el checkpoint `izc-trainonly-2026-09-30`:
 grilla de `params.yaml` (`kilonova_windows`) -- z 0.02-1.0, 100 nodos log, 10 000 realizaciones por

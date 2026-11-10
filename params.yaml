@@ -49,3 +49,13 @@ kilonova_windows:
 izc_windows:
   deficit_scale: 0.9
   brightness_source: window
+
+# Afterglows de GRB como contaminante (kn-afterglow-windows). Poblacion continua sobre el espacio
+# de configs/afterglow.yaml; de cada sorteo queda ventana en ~0.24 (deep) y ~0.22 (wide), el 65% es
+# demasiado debil y el 5% se descarta por saturar (mas brillante que 15 mag). 500 000 sorteos dan
+# ~118 000 afterglows por tier, del orden de SN Ib / SN Ic en OpenUniverse. Medido 2026-11-10:
+# 116 sorteos/s con 30 workers, 75 min la corrida.
+# --workers no va en el cmd: es una decision de la maquina, no del dataset.
+afterglow_windows:
+  n_afterglows: 500000
+  seed: 0

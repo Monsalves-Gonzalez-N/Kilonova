@@ -84,3 +84,95 @@ def test_the_catalogue_split_ignores_the_izc():
     for side_with, side_without in zip(split_with, split_without, strict=True):
         catalogue_side = side_with[~with_izc["is_izc"][side_with]]
         assert np.array_equal(np.sort(catalogue_side), np.sort(side_without))
+
+
+# ----------------------------------------------------------------------------- readers
+pd = pytest.importorskip("pandas")
+from openuniverse_data import (  # noqa: E402
+    BRIGHT_LIMIT_MAG,
+    _read_afterglow_parquet,
+    _read_contaminants_parquet,
+    token_cache_name,
+)
+
+WINDOW_BANDS = ["Z087", "Y106", "J129"]
+
+
+def _write_windows(path, objects):
+    """One tiny long-format parquet: `objects` maps object_id -> (label, brightest mag_true).
+    Every object gets 2 epochs x 3 bands; the first row carries the brightest true magnitude."""
+    rows = []
+    for object_id, (label, brightest) in objects.items():
+        for epoch in (1, 2):
+            for band in WINDOW_BANDS:
+                first = epoch == 1 and band == WINDOW_BANDS[0]
+                rows.append(
+                    {
+                        "object_id": object_id,
+                        "label": label,
+                        "z_CMB": 0.3,
+                        "days_since_detection": 5.0 * (epoch - 1),
+                        "band": band,
+                        "observed": True,
+                        "detected": True,
+                        "snr": 20.0,
+                        "mag_observed": 22.0,
+                        "mag_err": 0.05,
+                        "mag_limit_5sigma": 25.0,
+                        "mag_true": brightest if first else 22.0,
+                    }
+                )
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
+
+def test_objects_brighter_than_the_saturation_limit_are_dropped(tmp_path):
+    path = tmp_path / "windows.parquet"
+    _write_windows(
+        path,
+        {
+            "snana_1_10": ("SN Ia", 22.0),
+            "snana_1_11": ("SLSN-I", BRIGHT_LIMIT_MAG - 0.5),  # saturated at one epoch and band
+            "snana_1_12": ("SN II", BRIGHT_LIMIT_MAG),  # at the limit: kept
+            "snana_1_13": ("SN Ib", np.inf),  # band with no flux: never saturated
+        },
+    )
+    big, counts, meta = _read_contaminants_parquet(str(path), "deep")
+    assert meta["number_saturated"] == 1
+    assert list(meta["group_key"]) == ["snana_1_10", "snana_1_12", "snana_1_13"]
+    assert list(meta["orig_label"]) == ["SN Ia", "SN II", "SN Ib"]
+    assert len(counts) == 3 and counts.sum() == 3 * 6 == len(big["day"])
+
+
+def test_afterglow_group_is_the_object_id_and_keeps_its_own_label(tmp_path):
+    path = tmp_path / "afterglow_windows_deep.parquet"
+    _write_windows(
+        path, {"afterglow_0000007": ("GRB afterglow", 21.0), "afterglow_0000003": ("GRB afterglow", 23.0)}
+    )
+    _, _, meta = _read_afterglow_parquet(str(path), "deep")
+    assert list(meta["group_key"]) == ["afterglow_0000003", "afterglow_0000007"]
+    assert set(meta["orig_label"]) == {"GRB afterglow"}
+
+
+def test_afterglows_are_split_like_any_other_contaminant_class():
+    """They are not augmentation: every split has to hold some, and a group never straddles two."""
+    meta = _synthetic_meta()
+    afterglow_keys = np.array([f"afterglow_{index:07d}" for index in range(200)])
+    meta = {
+        "group_key": np.concatenate([meta["group_key"], afterglow_keys, afterglow_keys]),
+        "orig_label": np.concatenate([meta["orig_label"], np.full(400, "GRB afterglow")]),
+        "is_kn": np.concatenate([meta["is_kn"], np.zeros(400, bool)]),
+        "is_izc": np.concatenate([meta["is_izc"], np.zeros(400, bool)]),
+        "redshift": np.concatenate([meta["redshift"], np.zeros(400, np.float32)]),
+    }
+    train, validation, test = _leakage_aware_split(meta, (0.8, 0.1, 0.1), random_seed=1)
+    is_afterglow = meta["orig_label"] == "GRB afterglow"
+    for side in (train, validation, test):
+        assert is_afterglow[side].any()
+    for left, right in ((train, validation), (train, test), (validation, test)):
+        assert not set(meta["group_key"][left]) & set(meta["group_key"][right])
+
+
+def test_token_cache_name_is_one_file_per_mix():
+    assert token_cache_name(False, False) == "openuniverse_tokens.npz"
+    assert token_cache_name(True, False) == "openuniverse_tokens_izc.npz"
+    assert token_cache_name(True, True) == "openuniverse_tokens_izc_afterglow.npz"

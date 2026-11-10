@@ -1,16 +1,23 @@
 """OpenUniverse dataloader for the kilonova classifier (KN vs. everything else).
 
-Four source files, all long-format parquet with the same window schema:
+Source files, all long-format parquet with the same window schema:
 
-    * kn_windows_deep.parquet     / kn_windows_wide.parquet      -> the KN class
-    * early_windows_deep.parquet  / early_windows_wide.parquet   -> the contaminants
+    * kn_windows_deep.parquet        / kn_windows_wide.parquet         -> the KN class
+    * early_windows_deep.parquet     / early_windows_wide.parquet      -> the contaminants
+    * afterglow_windows_deep.parquet / afterglow_windows_wide.parquet  -> GRB afterglows, one more
+      contaminant class (`kn-afterglow-windows`); optional
+    * izc_windows_deep.parquet       / izc_windows_wide.parquet        -> low-z re-renderings of the
+      OpenUniverse contaminants, train-only augmentation; optional
+
+Every source goes through the same saturation cut: an object whose true magnitude is brighter than
+BRIGHT_LIMIT_MAG in any band at any epoch of its window is dropped (see `_read_long_parquet`).
 
 The data already comes windowed (up to 4 visit-day epochs x 5 bands per tier), so there is no
 first-detection anchoring / windowing to do — this module only maps each measurement to a token,
 fits the magnitude normalization, and builds a leakage-aware train/val/test split.
 
 Task: BINARY {KN, other}.  `other` pools every SNANA contaminant (SN II/Ia/Ib/Ic/Iax,
-TDE, SLSN-I, PISN). deep and wide are COMBINED into one model over a 6-band vocabulary
+TDE, SLSN-I, PISN) plus the GRB afterglows. deep and wide are COMBINED into one model over a 6-band vocabulary
 (R062, Z087, Y106, J129, H158, F184); a band a given tier never observes is simply absent
 (it never produces a token), exactly like a real missing band.
 
@@ -24,6 +31,9 @@ deep/wide files, because both tiers observe the same underlying transient.
     * KN  -> group = `simulation_id` (the physical ejecta model), read off the first field of the
       kn_object_id. 900 models each spawn many realizations (x angle_index x redshift x noise); a
       model must live in exactly one split.
+    * afterglows -> group = `object_id` (`afterglow_{id}`, the same string in deep and wide), one
+      more stratum of the contaminant carving, so they are in validation and test like any other
+      contaminant class: the point of the sample is to measure what the model does with them.
     * contaminants -> group = `object_id`, stratified by original class. The deep file is a
       superset of the wide one: 717,863 of the 717,864 wide transients also appear in deep with
       the SAME object_id, so grouping is what keeps the two views of one SNANA light curve on the
@@ -94,6 +104,13 @@ PER_TOKEN_KEYS = [
 ]
 GLOBAL_KEYS = ["redshift", "has_redshift"]
 
+# Saturation cut, applied to EVERY source when it is read: an object whose true magnitude is
+# brighter than this in any band at any epoch of its window is dropped. 15.0 is the bright end of
+# the WFI point-source saturation table (configs/afterglow.yaml, `saturation`); the afterglow
+# generator already applies it over its 8 visits, and here the same rule reaches the kilonovae, the
+# OpenUniverse contaminants and the izc re-renderings (which is where it bites: low-z SLSN-I).
+BRIGHT_LIMIT_MAG = 15.0
+
 SHIFT_PROBABILITY = 0.20  # slide the window forward by one epoch (late-onset sim)
 REDSHIFT_DROPOUT_PROBABILITY = 0.50  # hide z from the model -> learned [NO_Z] token
 
@@ -104,7 +121,9 @@ REDSHIFT_DROPOUT_PROBABILITY = 0.50  # hide z from the model -> learned [NO_Z] t
 #   v2: contaminant groups are the bare object_id, global across tiers.
 #   v3: meta carries `is_izc`, and the izc objects are train-only (an older cache has no way to
 #       tell them apart, so its split would still leak them into validation and test).
-GROUP_KEY_VERSION = 3
+#   v4: the saturation cut (BRIGHT_LIMIT_MAG) removes objects at read time, so a v3 cache holds
+#       objects this revision never trains on, and the afterglow source joins the mix.
+GROUP_KEY_VERSION = 4
 
 # Magnitude normalization, fit on the TRAIN split inside build_dataloaders (module globals).
 MAG_MEAN = None
@@ -174,8 +193,17 @@ def _read_long_parquet(path, group_key_from_ids):
             "mag_observed",
             "mag_err",
             "mag_limit_5sigma",
+            "mag_true",
         ],
     ).to_pandas()
+
+    # Saturation cut on the TRUE magnitude over every band and epoch of the window, observed or
+    # not: a source this bright saturates the detector wherever it is pointed at. +inf (band with
+    # no flux) and NaN (band outside the model) never trigger it.
+    brightest = table.groupby("object_id", sort=False)["mag_true"].transform("min")
+    saturated = brightest < BRIGHT_LIMIT_MAG
+    number_saturated = int(table.loc[saturated, "object_id"].nunique())
+    table = table[~saturated.to_numpy()]
 
     letters = table["band"].map(BAND_NAME_TO_LETTER)
     table = table[letters.notna()].copy()
@@ -201,6 +229,7 @@ def _read_long_parquet(path, group_key_from_ids):
         "orig_label": first_row["label"].to_numpy().astype(str),
         "redshift": first_row["z_CMB"].to_numpy().astype(np.float32),
         "group_key": group_key_from_ids(unique_ids),
+        "number_saturated": number_saturated,
     }
     return big, counts, meta
 
@@ -211,6 +240,17 @@ def _read_contaminants_parquet(path, tier):  # tier unused: groups are deliberat
     the wide one, so the same transient appears in both with the same id and its two views must
     stay a single group across the two files -- same underlying SNANA light curve, same z, same
     peak; only bands, exposure, noise and window differ."""
+    return _read_long_parquet(path, lambda ids: np.asarray(ids, dtype=str))
+
+
+def _read_afterglow_parquet(path, tier):  # tier unused, for the same reason as the contaminants
+    """GRB afterglows from afterglow_windows_{tier}.parquet (kn-afterglow-windows).
+
+    Group by object: the object_id is `afterglow_{afterglow_id}` and one drawn afterglow is observed
+    in both tiers under the same id, so the group is the id itself, global across the two files like
+    the OpenUniverse contaminants. Every afterglow is an independent draw of the parameter space, so
+    there is no model or template to group by beyond that. The label is a single class
+    (`GRB afterglow`), which the split stratifies like any other contaminant class."""
     return _read_long_parquet(path, lambda ids: np.asarray(ids, dtype=str))
 
 
@@ -240,19 +280,30 @@ def _read_kn_parquet(path, tier):  # tier unused: KN groups are deliberately not
 
 # ----------------------------------------------------------------------------- assembly + cache
 def _assemble(
-    kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep=None, izc_wide=None, verbose=True
+    kn_deep,
+    kn_wide,
+    contaminant_deep,
+    contaminant_wide,
+    izc_deep=None,
+    izc_wide=None,
+    afterglow_deep=None,
+    afterglow_wide=None,
+    verbose=True,
 ):
     """Read every source into flat ragged arrays (CSR-style: one big array per field +
     per-object offsets) plus per-object metadata.
 
-    The izc sources are optional. They are contaminants for the label (same window schema, same
-    class names) but they are flagged in `meta["is_izc"]`, because the split treats them as training
-    augmentation and keeps them out of validation and test."""
+    The izc and afterglow sources are optional. Both are contaminants for the label (same window
+    schema). The afterglows are one more contaminant class and go through the same split as the
+    OpenUniverse ones; the izc are flagged in `meta["is_izc"]`, because the split treats them as
+    training augmentation and keeps them out of validation and test."""
     sources = [
         ("KN", _read_kn_parquet, kn_deep, "deep"),
         ("KN", _read_kn_parquet, kn_wide, "wide"),
         ("contaminant", _read_contaminants_parquet, contaminant_deep, "deep"),
         ("contaminant", _read_contaminants_parquet, contaminant_wide, "wide"),
+        ("contaminant", _read_afterglow_parquet, afterglow_deep, "deep"),
+        ("contaminant", _read_afterglow_parquet, afterglow_wide, "wide"),
         ("izc", _read_izc_parquet, izc_deep, "deep"),
         ("izc", _read_izc_parquet, izc_wide, "wide"),
     ]
@@ -271,7 +322,9 @@ def _assemble(
         is_izc.append(np.full(len(counts), kind == "izc"))
         if verbose:
             print(
-                f"  read {os.path.basename(path):32s} {len(counts):>8,} objects ({time.time() - start:.1f}s)"
+                f"  read {os.path.basename(path):32s} {len(counts):>8,} objects, "
+                f"{meta['number_saturated']:>6,} dropped brighter than {BRIGHT_LIMIT_MAG:g} mag "
+                f"({time.time() - start:.1f}s)"
             )
 
     n_tokens = np.concatenate(counts_list)
@@ -293,6 +346,17 @@ def _assemble(
     return big, meta
 
 
+def token_cache_name(use_izc, use_afterglow):
+    """One cache file per source mix, so switching a flag rebuilds instead of silently reusing the
+    tokens of another mix (the cache also checks `source_names`, this keeps every mix warm)."""
+    name = "openuniverse_tokens"
+    if use_izc:
+        name += "_izc"
+    if use_afterglow:
+        name += "_afterglow"
+    return name + ".npz"
+
+
 def _load_or_build(
     cache_path,
     kn_deep,
@@ -301,12 +365,23 @@ def _load_or_build(
     contaminant_wide,
     izc_deep=None,
     izc_wide=None,
+    afterglow_deep=None,
+    afterglow_wide=None,
     verbose=True,
 ):
     source_names = np.array(
         [
             os.path.basename(path)
-            for path in (kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep, izc_wide)
+            for path in (
+                kn_deep,
+                kn_wide,
+                contaminant_deep,
+                contaminant_wide,
+                izc_deep,
+                izc_wide,
+                afterglow_deep,
+                afterglow_wide,
+            )
             if path is not None
         ]
     )
@@ -340,7 +415,15 @@ def _load_or_build(
     if verbose:
         print("assembling tokens from source files...")
     big, meta = _assemble(
-        kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep, izc_wide, verbose=verbose
+        kn_deep,
+        kn_wide,
+        contaminant_deep,
+        contaminant_wide,
+        izc_deep,
+        izc_wide,
+        afterglow_deep,
+        afterglow_wide,
+        verbose=verbose,
     )
     if cache_path:
         np.savez(cache_path, **big, **meta, group_key_version=GROUP_KEY_VERSION, source_names=source_names)
@@ -541,6 +624,8 @@ def build_dataloaders(
     contaminant_wide,
     izc_deep=None,
     izc_wide=None,
+    afterglow_deep=None,
+    afterglow_wide=None,
     batch_size=1024,
     fractions=(0.90, 0.05, 0.05),
     split_seed=42,
@@ -555,11 +640,23 @@ def build_dataloaders(
     `izc_deep` / `izc_wide` are optional: the re-rendered low-redshift contaminants of
     `kn-izc-windows`. They are TRAIN-ONLY augmentation: validation and test hold OpenUniverse
     objects alone, and an izc object whose parent is held out there is dropped rather than trained
-    on (see `_leakage_aware_split`)."""
+    on (see `_leakage_aware_split`).
+
+    `afterglow_deep` / `afterglow_wide` are optional too: the GRB afterglows of
+    `kn-afterglow-windows`, one more contaminant class that is split and scored like the others."""
     global MAG_MEAN, MAG_STD, SIGMA_MAG_MEAN, SIGMA_MAG_STD
 
     big, meta = _load_or_build(
-        cache_path, kn_deep, kn_wide, contaminant_deep, contaminant_wide, izc_deep, izc_wide, verbose
+        cache_path,
+        kn_deep,
+        kn_wide,
+        contaminant_deep,
+        contaminant_wide,
+        izc_deep,
+        izc_wide,
+        afterglow_deep,
+        afterglow_wide,
+        verbose,
     )
 
     label_by_index = np.where(meta["is_kn"], GROUP_TO_LABEL["KN"], GROUP_TO_LABEL["other"])
