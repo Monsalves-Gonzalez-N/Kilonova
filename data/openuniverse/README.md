@@ -1,6 +1,6 @@
 # `data/openuniverse/` — qué archivo es cuál
 
-Estado a **2026-07-30**. Este directorio acumula varias generaciones de los mismos datos, así que
+Estado a **2026-10-19**. Este directorio acumula varias generaciones de los mismos datos, así que
 la regla es: **el nombre limpio es el bueno; cualquier sufijo después de la extensión es una
 generación superada que se conserva solo para comparar.** Nada con sufijo debe entrar a un
 entrenamiento.
@@ -9,13 +9,24 @@ entrenamiento.
 
 | archivo | qué es | generado por |
 |---|---|---|
-| `early_windows_{deep,wide}.parquet` | contaminantes OpenUniverse (SN, TDE, SLSN, PISN) | `kn-run-openuniverse`, 2026-07-28 |
-| `kn_windows_{deep,wide}.parquet` | kilonovas LANL inyectadas | `kn-kilonova-windows`, 2026-07-30 (2ª corrida del día: paridad de cadencia) |
-| `izc_windows_{deep,wide}.parquet` | contaminantes de OpenUniverse **re-renderizados** al z que al survey le falta | `kn-izc-windows`, 2026-09-09 |
+| `early_windows_{deep,wide}.parquet` | contaminantes OpenUniverse (SN, TDE, SLSN, PISN) | `kn-run-openuniverse`, 2026-09-18 (`early_windows_regen_2026-09-18.log`) |
+| `kn_windows_{deep,wide}.parquet` | kilonovas LANL inyectadas, z sorteado dentro de cada bin | `kn-kilonova-windows`, 2026-09-16 (`_old_izc/kn_windows_regen_2026-09-16.log`) |
+| `izc_windows_{deep,wide}.parquet` | contaminantes de OpenUniverse **re-renderizados** al z que al survey le falta | `kn-izc-windows`, 2026-09-22 (`izc_regen_2026-09-22.log`) |
 | `snana_catalogs/` | los 33 catalogos del release (135 MB, sin light curves) | descargados; entrada de `kn-izc-windows`, no producto |
 | `openuniverse_tokens.npz` | caché de tokens (`group_key` v2, split por transiente) | `training/openuniverse_data.py`, 2026-08-02 |
 | `openuniverse_tokens_izc.npz` | caché con el izc; desde `group_key` v3 (2026-09-30) lleva `is_izc` y el izc es solo-train | `training/build_token_cache.py --izc` |
 | `openuniverse_tokens_test.npz` | recorte solo-test de la anterior; en v3 sale **sin izc** | `training/build_token_cache.py --izc --cut-test` |
+
+Las `kn_windows_*` vigentes son las que entrenaron el checkpoint `izc-trainonly-2026-09-30`:
+grilla de `params.yaml` (`kilonova_windows`) -- z 0.02-1.0, 100 nodos log, 10 000 realizaciones por
+nodo = 1 000 000 KN sobre 900 simulaciones LANL x 54 angulos --, pero **el z no es el nodo**: cada
+nodo define un bin (bordes en las medias geometricas entre nodos, los extremos recortados a 0.02 y
+1.0) y el z se sortea log-uniforme dentro de el (`sample_kn_realizations_in_bins`). Sobreviven con
+al menos una deteccion 753 461 en deep (z mediana 0.088, p95 0.49) y 649 436 en wide (0.074, 0.38).
+Su `dvc.lock` se registro el 2026-10-19, despues de generarlas, contra el codigo de `2382325` +
+`f7c5810`; ese codigo reproduce estos objetos (mismo sorteo por bin, y el campo HLTDS que fija
+`f7c5810` es el que el sorteo con `FIELD_SEED=0` ya elegia: EDFS_a deep, EDFS_b wide) salvo que hoy
+escribe ademas una columna `mjd` que estos parquets no tienen y que el training no lee.
 
 Los dos `.npz` son derivados y el pipeline los reconstruye solo, pero desde el **2026-08-04 se
 versionan igual**: bajándolos, el split evaluado es el mismo bit a bit en vez de solo el mismo
