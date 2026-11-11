@@ -12,10 +12,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-D_MODEL = 64
-NUM_HEADS = 4
-NUM_LAYERS = 2
-D_FEEDFORWARD = 128
+D_MODEL = 192
+NUM_HEADS = 6
+NUM_LAYERS = 6
+D_FEEDFORWARD = 768  # standard transformer ratio, 4 x D_MODEL
 DROPOUT = 0.1
 NUM_CLASSES = 2
 

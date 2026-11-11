@@ -6,6 +6,7 @@ Purely illustrative (no trained weights involved).
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
+from model import D_FEEDFORWARD, D_MODEL, NUM_HEADS, NUM_LAYERS
 
 OUTPUT_PATH = "plots/architecture_diagram"
 
@@ -18,11 +19,6 @@ BLUE_FILL, BLUE_EDGE = "#a9d5ec", "#5f9ec4"
 GREEN_FILL, GREEN_EDGE = "#b7dfb9", "#6aa86d"
 PANEL_FILL, PANEL_EDGE = "#ececec", "#3c3c3c"
 LINE_COLOR = "#222222"
-
-D_MODEL = 192
-NUM_HEADS = 6
-NUM_LAYERS = 6
-D_FEEDFORWARD = 768
 
 COLUMN_X = 0.0
 BOX_WIDTH = 3.1

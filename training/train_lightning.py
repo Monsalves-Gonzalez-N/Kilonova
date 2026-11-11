@@ -17,7 +17,7 @@ import lightning as L
 import torch
 import torch.nn as nn
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
-from model import KilonovaTransformer
+from model import D_FEEDFORWARD, D_MODEL, DROPOUT, NUM_HEADS, NUM_LAYERS, KilonovaTransformer
 from openuniverse_data import GROUP_ORDER, build_dataloaders, token_cache_name
 from torchmetrics import MeanMetric
 from torchmetrics.classification import MulticlassAccuracy
@@ -72,11 +72,11 @@ class LitKilonova(L.LightningModule):
         learning_rate=1e-3,
         weight_decay=1e-4,
         num_classes=NUM_CLASSES,
-        d_model=128,
-        num_heads=4,
-        num_layers=4,
-        d_feedforward=512,
-        dropout=0.1,
+        d_model=D_MODEL,
+        num_heads=NUM_HEADS,
+        num_layers=NUM_LAYERS,
+        d_feedforward=D_FEEDFORWARD,
+        dropout=DROPOUT,
         max_epochs=30,
         min_learning_rate=1e-5,
         warmup_epochs=5,
@@ -395,13 +395,16 @@ def parse_arguments():
     parser.add_argument(
         "--patience", type=int, default=25, help="early-stopping patience on val_acc (epochs)"
     )
-    parser.add_argument("--d-model", type=int, default=192)
-    parser.add_argument("--num-heads", type=int, default=6)
-    parser.add_argument("--num-layers", type=int, default=6)
+    parser.add_argument("--d-model", type=int, default=D_MODEL)
+    parser.add_argument("--num-heads", type=int, default=NUM_HEADS)
+    parser.add_argument("--num-layers", type=int, default=NUM_LAYERS)
     parser.add_argument(
-        "--d-feedforward", type=int, default=768, help="FFN width; standard transformer ratio is 4x d_model"
+        "--d-feedforward",
+        type=int,
+        default=D_FEEDFORWARD,
+        help="FFN width; standard transformer ratio is 4x d_model",
     )
-    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--dropout", type=float, default=DROPOUT)
     parser.add_argument(
         "--warmup-epochs", type=int, default=5, help="linear LR warmup length before cosine decay (epochs)"
     )
