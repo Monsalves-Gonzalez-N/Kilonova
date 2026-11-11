@@ -96,11 +96,12 @@ INDEX_TO_BAND_LETTER = {index: letter for letter, index in BAND_TO_INDEX.items()
 # ---- panel (a): light curve
 NUMBER_OF_MAGNITUDE_TICKS = 7
 TIME_PADDING_DAYS = 1.5
+TIME_TICK_SPACING_DAYS = 2
 
 # ---- panel (b): token tensor
 CELL = 1.0
 # the magnitude needs five characters and the other cells one, so the columns are not equally wide
-COLUMN_WIDTHS = [0.85, 0.95, 0.85, 1.65, 1.15, 1.15, 1.15]
+COLUMN_WIDTHS = [0.8, 1.0, 0.95, 1.7, 1.35, 1.4, 1.4]
 COLUMN_EDGES = [sum(COLUMN_WIDTHS[:index]) for index in range(len(COLUMN_WIDTHS) + 1)]
 COLUMN_CENTERS = [(left + right) / 2 for left, right in zip(COLUMN_EDGES[:-1], COLUMN_EDGES[1:], strict=True)]
 GRID_WIDTH = COLUMN_EDGES[-1]
@@ -125,31 +126,31 @@ GLOBAL_FILL = "0.88"
 
 # ---- composition
 FIGURE_WIDTH = 11.5
-FIGURE_HEIGHT = 11.0
+FIGURE_HEIGHT = 11.5
 # panel rectangles in inches: (left, bottom, width, height). The token tensor is then shifted
 # sideways until it sits on the vertical line of the token row below it.
-INPUT_RECTANGLE = (0.95, 7.15, 3.55, 3.4)
-TOKENS_RECTANGLE = (5.6, 6.75, 5.6, 3.8)
-TOKEN_ENCODING_RECTANGLE = (5.9, 2.95, 4.2, 3.35)
+INPUT_RECTANGLE = (0.85, 7.7, 3.4, 3.4)
+TOKENS_RECTANGLE = (5.6, 7.25, 5.6, 3.8)
+TOKEN_ENCODING_RECTANGLE = (5.4, 2.85, 5.2, 4.0)
 SEQUENCE_RECTANGLE = (4.25, 0.1, 7.05, 2.15)
-ENCODER_RECTANGLE = (0.5, 1.95, 3.6, 4.3)
+ENCODER_RECTANGLE = (0.4, 1.95, 4.0, 4.8)
 # text sizes, chosen so that every panel reads like the encoder
-INPUT_TICK_LABEL_SIZE = 11
-INPUT_AXIS_LABEL_SIZE = 12
-INPUT_BAND_LABEL_SCALE = 1.15
-TOKENS_TEXT_SCALE = 1.3
+INPUT_TICK_LABEL_SIZE = 13
+INPUT_AXIS_LABEL_SIZE = 14
+INPUT_BAND_LABEL_SCALE = 1.33
+TOKENS_TEXT_SCALE = 1.6
 # the field names are as wide as their column, so they cannot grow with the cell values
-TOKENS_FIELD_NAME_SCALE = 0.95
-TOKENS_VISIT_LABEL_SCALE = 1.05
-TOKEN_ENCODING_TEXT_SCALE = 1.08
-TOKEN_ENCODING_FIELD_NAME_SCALE = 0.9
-SEQUENCE_TEXT_SCALE = 1.3
-ENCODER_TEXT_SCALE = 0.9
-PANEL_LABEL_SIZE = 14
+TOKENS_FIELD_NAME_SCALE = 1.1
+TOKENS_VISIT_LABEL_SCALE = 1.3
+TOKEN_ENCODING_TEXT_SCALE = 1.4
+TOKEN_ENCODING_FIELD_NAME_SCALE = 1.1
+SEQUENCE_TEXT_SCALE = 1.6
+ENCODER_TEXT_SCALE = 1.1
+PANEL_LABEL_SIZE = 16
 CONNECTOR_COLOR = "0.35"
 CONNECTOR_WIDTH = 2.2
 # inches
-BAND_LABEL_CLEARANCE = 0.85
+BAND_LABEL_CLEARANCE = 1.0
 CONNECTOR_GAP = 0.1
 ENCODING_TO_SEQUENCE_DROP = 0.3
 
@@ -330,6 +331,7 @@ def draw_input_panel(axes, curves, visits, bands):
         )
 
     axes.set_xlim(time_min, time_max)
+    axes.set_xticks(np.arange(0, time_max, TIME_TICK_SPACING_DAYS))
     axes.set_ylim(faintest_magnitude, brightest_magnitude)
     first_tick = np.ceil(brightest_magnitude)
     axes.set_yticks(np.arange(first_tick, first_tick + NUMBER_OF_MAGNITUDE_TICKS))
